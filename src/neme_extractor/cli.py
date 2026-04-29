@@ -89,5 +89,47 @@ def project_rerun(
     run_rerun(project=p, video_stem=video)
 
 
+@app.command()
+def ui(
+    host: str = typer.Option("127.0.0.1", help="Bind address."),
+    port: int = typer.Option(0, help="Port to bind; 0 picks a free one."),
+    no_browser: bool = typer.Option(False, "--no-browser",
+                                    help="Don't auto-open the browser."),
+    dry_run: bool = typer.Option(False, "--dry-run",
+                                 help="Construct the app and exit (for tests)."),
+) -> None:
+    """Start the local web UI server."""
+    import os
+    import socket
+    import threading
+    import webbrowser
+
+    import uvicorn
+
+    from neme_extractor.server.app import create_app
+
+    state_dir = os.environ.get("NEME_STATE_DIR")
+    create_kwargs = {"state_dir": Path(state_dir)} if state_dir else {}
+    fastapi_app = create_app(**create_kwargs)
+
+    if dry_run:
+        return
+
+    # Pick a free port if 0.
+    bind_port = port
+    if bind_port == 0:
+        with socket.socket() as s:
+            s.bind((host, 0))
+            bind_port = s.getsockname()[1]
+
+    url = f"http://{host}:{bind_port}"
+    console.print(f"[bold green]neme-extractor[/bold green] :: serving on {url}")
+
+    if not no_browser:
+        threading.Timer(1.0, lambda: webbrowser.open(url)).start()
+
+    uvicorn.run(fastapi_app, host=host, port=bind_port, log_level="info")
+
+
 if __name__ == "__main__":
     app()
