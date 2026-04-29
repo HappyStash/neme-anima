@@ -8,6 +8,7 @@
   import TopStrip from "$lib/components/TopStrip.svelte";
   import FramesTab from "$lib/components/FramesTab.svelte";
   import RegexModal from "$lib/components/RegexModal.svelte";
+  import SourcesTab from "$lib/components/SourcesTab.svelte";
 
   let conn: Connection | null = null;
   let regexOpen = $state(false);
@@ -50,7 +51,7 @@
   <main class="px-4 pb-12">
     {#if projectsStore.active}
       {#if viewStore.tab === "sources"}
-        <p class="text-slate-500 mt-8">Sources tab — Task 11.</p>
+        <SourcesTab />
       {:else if viewStore.tab === "frames"}
         <FramesTab />
       {:else if viewStore.tab === "settings"}

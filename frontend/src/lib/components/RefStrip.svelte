@@ -1,0 +1,52 @@
+<script lang="ts">
+  import * as api from "$lib/api";
+  import { projectsStore } from "$lib/stores/projects.svelte";
+
+  type Props = {
+    sourceIdx: number;
+    refPaths: readonly string[];
+    excluded: readonly string[];
+  };
+  const { sourceIdx, refPaths, excluded }: Props = $props();
+
+  function isActive(path: string): boolean {
+    return !excluded.includes(path);
+  }
+
+  async function toggle(path: string) {
+    const slug = projectsStore.active?.slug;
+    if (!slug) return;
+    const next = isActive(path)
+      ? [...excluded, path]
+      : excluded.filter((p) => p !== path);
+    await api.setExcludedRefs(slug, sourceIdx, next);
+    if (projectsStore.active) await projectsStore.load(projectsStore.active.slug);
+  }
+
+  // Generate a deterministic gradient from the path for fallback display.
+  function gradientFor(path: string): string {
+    let hash = 0;
+    for (let i = 0; i < path.length; i++) hash = (hash * 31 + path.charCodeAt(i)) >>> 0;
+    const hue = hash % 360;
+    return `linear-gradient(135deg, hsl(${hue}, 60%, 65%), hsl(${(hue + 40) % 360}, 70%, 35%))`;
+  }
+</script>
+
+<div class="flex items-center gap-1 mt-1.5">
+  <span class="text-[9px] uppercase tracking-wide text-slate-600 mr-1">refs</span>
+  {#each refPaths as path (path)}
+    {@const active = isActive(path)}
+    <button
+      type="button"
+      onclick={() => toggle(path)}
+      class="w-6 h-6 rounded transition-all relative
+        {active ? 'shadow-[0_0_0_1.5px_rgba(99,102,241,1)]' : 'grayscale brightness-50 opacity-50 hover:opacity-90 hover:brightness-75'}"
+      title={path}
+      style="background: {gradientFor(path)}"
+    >
+      {#if !active}
+        <span class="absolute inset-x-0 top-1/2 -translate-y-1/2 h-px bg-red-500 -rotate-[22deg] shadow-[0_0_4px_rgba(239,68,68,0.6)]"></span>
+      {/if}
+    </button>
+  {/each}
+</div>
