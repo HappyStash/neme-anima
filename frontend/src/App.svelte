@@ -5,6 +5,7 @@
   import { queueStore } from "$lib/stores/queue.svelte";
   import { connectEvents, type Connection } from "$lib/ws";
   import TopStrip from "$lib/components/TopStrip.svelte";
+  import FramesTab from "$lib/components/FramesTab.svelte";
 
   let conn: Connection | null = null;
 
@@ -33,7 +34,7 @@
       {#if viewStore.tab === "sources"}
         <p class="text-slate-500 mt-8">Sources tab — Task 11.</p>
       {:else if viewStore.tab === "frames"}
-        <p class="text-slate-500 mt-8">Frames tab — Task 8.</p>
+        <FramesTab />
       {:else if viewStore.tab === "settings"}
         <p class="text-slate-500 mt-8">Settings tab — Task 12.</p>
       {/if}
