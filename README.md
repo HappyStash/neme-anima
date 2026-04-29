@@ -34,7 +34,7 @@ First run pulls about 2.8 GB of weights from HuggingFace (anime YOLOv8 person + 
 By default `~/.cache/huggingface/hub/`. If you already have a HuggingFace cache elsewhere — say a Windows host running ComfyUI — point at it:
 
 ```sh
-HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-extractor extract ...
+HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-extractor project extract ...
 ```
 
 This tool doesn't use SAM 3 even if you have it cached. `isnetis` from `imgutils` produces cleaner masks on anime and runs lighter. ComfyUI's `face_yolov8*.pt` weights aren't drop-in replacements either; `imgutils` resolves models through its own `deepghs/anime_*_detection` registry.
