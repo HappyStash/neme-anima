@@ -42,3 +42,11 @@ def test_slug_is_filesystem_safe(tmp_path: Path):
     # Slug should be the folder name, not the display name.
     assert p.slug == "p"
     assert p.name == "Megumin's WIP / draft"
+
+
+def test_save_roundtrips_thresholds_overrides(tmp_path: Path):
+    p = Project.create(tmp_path / "p", name="p")
+    p.thresholds_overrides = {"identify": {"body_max_distance_loose": 0.22}}
+    p.save()
+    reloaded = Project.load(p.root)
+    assert reloaded.thresholds_overrides == {"identify": {"body_max_distance_loose": 0.22}}

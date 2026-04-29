@@ -92,4 +92,6 @@ class Project:
             "refs": [asdict(r) for r in self.refs],
             "thresholds_overrides": self.thresholds_overrides,
         }
-        (self.root / "project.json").write_text(json.dumps(out, indent=2))
+        tmp = self.root / "project.json.tmp"
+        tmp.write_text(json.dumps(out, indent=2))
+        tmp.replace(self.root / "project.json")
