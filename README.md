@@ -72,21 +72,32 @@ uv run neme-extractor project rerun ~/neme-projects/megumin --video ep01
 
 This skips detection + tracking and is roughly 10× faster than a fresh extract.
 
-## Web UI (backend)
+## Web UI
 
-A local web server is available alongside the CLI:
+A local web app is available alongside the CLI:
 
 ```sh
 uv run neme-extractor ui
 ```
 
-That binds to `127.0.0.1:<random-port>` and opens your browser. The full Svelte SPA lands in Phase 2B; right now this exposes the backend that drives it:
+That binds to `127.0.0.1:<random-port>` and opens your browser to the Svelte SPA. Layout is single-column edge-to-edge: top strip with project pills · view tabs (Sources / Frames / Settings) · density slider · queue pill, then the active view below.
+
+Workflow:
+
+1. **Create a project** by clicking `+` in the top strip — pick a name; folder defaults to `~/neme-projects/<slug>`.
+2. **Sources tab** — drop in MKV/MP4 videos and reference images (or paste paths via the manual prompt). For each video, click any reference thumbnail to opt out of using that ref for that video.
+3. **Run** extraction from the Sources tab — the queue pill turns green and frames stream in.
+4. **Frames tab** — hover any thumbnail to see tags as overlay pills. Click a pill to edit it inline. Shift-click for ranges, Ctrl-click to multi-toggle, `A` selects all, `D` / `Esc` deselects.
+5. **Bulk regex** replace tags across selected frames with live preview of the first 20 changes.
+6. **Settings tab** — per-project threshold overrides (frame stride, identification distance, crop padding, etc.). Save, then re-run.
+
+The same surface is available as REST endpoints under `/api/*` if you want to drive it from the command line — see below.
+
+## REST API
 
 - REST endpoints under `/api/projects`, `/api/projects/<slug>/sources`, `/api/projects/<slug>/refs`, `/api/projects/<slug>/frames`, `/api/queue`
 - WebSocket at `/api/ws` streaming `queue.update` / `job.progress` / `job.frame` / `job.log` / `job.done` events as JSON
 - Health probe at `/api/health`
-
-You can drive the same flows from `curl`:
 
 ```sh
 curl -s http://127.0.0.1:<port>/api/projects | jq

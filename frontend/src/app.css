@@ -1,0 +1,18 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    color-scheme: dark;
+  }
+  body {
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Inter, sans-serif;
+  }
+}
+
+@layer components {
+  .gradient-accent {
+    @apply bg-gradient-to-br from-accent-500 to-violet2-500;
+  }
+}

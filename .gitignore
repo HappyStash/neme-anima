@@ -12,5 +12,8 @@ tests/fixtures/*.jpg
 !tests/fixtures/.gitkeep
 .coverage
 *.parquet
+frontend/node_modules/
+frontend/dist/
+src/neme_extractor/server/static/
 docs/superpowers/
 docs/anima-lora-training-notes.md
