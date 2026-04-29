@@ -64,22 +64,17 @@ def _crop_rgb(frame_rgb: np.ndarray, det: Detection) -> np.ndarray:
 class Identifier:
     """Holds reference embeddings and scores tracklets against them."""
 
-    def __init__(self, refs_dir: Path, cfg: IdentifyConfig):
+    def __init__(self, *, ref_paths: list[Path], cfg: IdentifyConfig):
         self.cfg = cfg
         self._ref_features: list[np.ndarray] = []
         self._ref_paths: list[Path] = []
-        self._load_refs(refs_dir)
+        self._load_refs(ref_paths)
 
-    def _load_refs(self, refs_dir: Path) -> None:
-        exts = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
-        paths = sorted(p for p in refs_dir.iterdir()
-                       if p.is_file() and p.suffix.lower() in exts)
+    def _load_refs(self, paths: list[Path]) -> None:
         if not paths:
-            raise ValueError(
-                f"No reference images found in {refs_dir} "
-                f"(supported: {sorted(exts)})"
-            )
+            raise ValueError("No reference images provided")
         for p in paths:
+            p = Path(p)
             img = Image.open(p).convert("RGB")
             feat = ccip_extract_feature(img)
             self._ref_features.append(feat)

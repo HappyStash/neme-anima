@@ -34,29 +34,43 @@ First run pulls about 2.8 GB of weights from HuggingFace (anime YOLOv8 person + 
 By default `~/.cache/huggingface/hub/`. If you already have a HuggingFace cache elsewhere — say a Windows host running ComfyUI — point at it:
 
 ```sh
-HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-extractor extract ...
+HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-extractor project extract ...
 ```
 
 This tool doesn't use SAM 3 even if you have it cached. `isnetis` from `imgutils` produces cleaner masks on anime and runs lighter. ComfyUI's `face_yolov8*.pt` weights aren't drop-in replacements either; `imgutils` resolves models through its own `deepghs/anime_*_detection` registry.
 
 ## Usage
 
+Create a project folder, add videos and a reference image, then run extraction:
+
 ```sh
-uv run neme-extractor extract path/to/video.mkv path/to/refs/ --out output/
+uv run neme-extractor project create ~/neme-projects/megumin --name megumin
+uv run neme-extractor project add-ref ~/neme-projects/megumin /path/to/portrait.png
+uv run neme-extractor project add-video ~/neme-projects/megumin /path/to/ep01.mkv
+uv run neme-extractor project add-video ~/neme-projects/megumin /path/to/ep02.mkv
+uv run neme-extractor project extract ~/neme-projects/megumin
 ```
 
-`refs/` needs at least one image of the character. You can drop in more — different outfits, angles, full-body and portrait — and matching becomes max-similarity over the set. For most characters, one clear portrait is plenty.
-
-You'll get:
+The project folder you'll get:
 
 ```
-output/<video_stem>/
-  kept/                 character crops (.png) + WD14 tags (.txt)
-  rejected/             one sample per rejected tracklet, for inspection
-  metadata.json         per-image traceability (timestamp, scene, scores)
-  thresholds.json       settings used for this run
-  cache/                detection + tracklet cache (used by rerun)
+~/neme-projects/megumin/
+  project.json
+  refs/
+  output/
+    kept/             ep01__s003_t012_f000847.png + .txt   (all videos, prefixed)
+    rejected/
+    metadata.jsonl    one line per kept/rejected frame across all runs
+    cache/<stem>/     scenes.parquet, tracklets.parquet (per video)
 ```
+
+Re-tune without re-running detection: edit `project.json`'s `thresholds_overrides`, then:
+
+```sh
+uv run neme-extractor project rerun ~/neme-projects/megumin --video ep01
+```
+
+This skips detection + tracking and is roughly 10× faster than a fresh extract.
 
 ## Performance
 
@@ -66,25 +80,6 @@ A 20-min episode at 24 fps lands around 2–3 minutes on a 4090. Four knobs if y
 - `detect.detect_faces` (default `false`) — face boxes aren't used by the current matcher. Flip on only if you wire up a face stream.
 - `frame_select.candidate_cap` (default 20) — long tracklets get downsampled to this many evenly-spaced candidates before ranking.
 - `frame_select.dedup_min_frame_gap` — minimum frames between picks within one tracklet, so you don't end up with three nearly-identical neighbouring frames.
-
-## Re-tune without re-running detection
-
-Edit `output/<video_stem>/thresholds.json` (e.g. relax `body_max_distance_loose` from `0.20` to `0.22`), then:
-
-```sh
-uv run neme-extractor rerun output/<video_stem>/
-```
-
-Skips detection and tracking, redoes identification, frame selection, cropping, and tagging. Roughly 10× faster than a fresh run.
-
-## Trying it on real content
-
-```sh
-mkdir refs && cp character_portrait.png refs/
-uv run neme-extractor extract test_clip.mkv refs/ --out output/
-```
-
-Look in `output/<video_stem>/kept/` — that's your dataset. Anything that didn't match the character lands in `rejected/` for inspection. Drop the `kept/` folder into a kohya-ss config and start training.
 
 ## Design notes
 
