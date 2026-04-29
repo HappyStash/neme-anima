@@ -98,4 +98,24 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     app.include_router(frames.router)
     app.include_router(queue_routes.router)
     app.include_router(ws_routes.router)
+
+    # Static SPA fallback — must be added LAST so /api/* routes win.
+    static_dir = Path(__file__).parent / "static"
+    if static_dir.exists() and (static_dir / "index.html").exists():
+        from starlette.responses import FileResponse
+        from starlette.staticfiles import StaticFiles
+
+        # Mount asset files under /assets/* so the SPA's hashed bundle URLs work.
+        if (static_dir / "assets").exists():
+            app.mount("/assets", StaticFiles(directory=static_dir / "assets"), name="assets")
+
+        @app.get("/", include_in_schema=False)
+        @app.get("/{full_path:path}", include_in_schema=False)
+        async def spa_fallback(full_path: str = "") -> FileResponse:
+            # Don't intercept API requests — return 404 for those.
+            if full_path.startswith("api/"):
+                from fastapi import HTTPException
+                raise HTTPException(status_code=404)
+            return FileResponse(static_dir / "index.html")
+
     return app
