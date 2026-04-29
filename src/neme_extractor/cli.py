@@ -28,9 +28,10 @@ def extract(
                                        help="Optional thresholds.json to override defaults."),
 ) -> None:
     """Run the full extraction pipeline on a video."""
-    from neme_extractor.pipeline import run_extract
-
-    run_extract(video=video, refs_dir=refs, out_root=out, config_path=config)
+    raise NotImplementedError(
+        "The legacy extract command has been replaced by the project-centric API. "
+        "Use 'neme-extractor project extract' (Task 8)."
+    )
 
 
 @app.command()
@@ -39,9 +40,10 @@ def rerun(
                                    help="Existing output/<video_stem>/ folder to re-tune."),
 ) -> None:
     """Re-run selection / framing / tagging from cached detections with edited thresholds.json."""
-    from neme_extractor.pipeline import run_rerun
-
-    run_rerun(out_dir=out_dir)
+    raise NotImplementedError(
+        "The legacy rerun command has been replaced by the project-centric API. "
+        "Use 'neme-extractor project rerun' (Task 8)."
+    )
 
 
 if __name__ == "__main__":
