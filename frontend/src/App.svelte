@@ -8,11 +8,13 @@
   import TopStrip from "$lib/components/TopStrip.svelte";
   import FramesTab from "$lib/components/FramesTab.svelte";
   import RegexModal from "$lib/components/RegexModal.svelte";
+  import CreateProjectModal from "$lib/components/CreateProjectModal.svelte";
   import SourcesTab from "$lib/components/SourcesTab.svelte";
   import SettingsTab from "$lib/components/SettingsTab.svelte";
 
   let conn: Connection | null = null;
   let regexOpen = $state(false);
+  let createOpen = $state(false);
 
   onMount(async () => {
     await projectsStore.refresh();
@@ -48,7 +50,7 @@
 </script>
 
 <div class="min-h-screen bg-ink-950 text-slate-100">
-  <TopStrip onopenRegex={() => (regexOpen = true)} />
+  <TopStrip onopenRegex={() => (regexOpen = true)} onopenCreate={() => (createOpen = true)} />
   <main class="px-4 pb-12">
     {#if projectsStore.active}
       {#if viewStore.tab === "sources"}
@@ -68,5 +70,8 @@
 
   {#if regexOpen}
     <RegexModal onclose={() => (regexOpen = false)} />
+  {/if}
+  {#if createOpen}
+    <CreateProjectModal onclose={() => (createOpen = false)} />
   {/if}
 </div>

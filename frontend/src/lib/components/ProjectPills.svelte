@@ -1,6 +1,9 @@
 <script lang="ts">
   import { projectsStore } from "$lib/stores/projects.svelte";
 
+  type Props = { onopenCreate: () => void };
+  const { onopenCreate }: Props = $props();
+
   function isActive(slug: string): boolean {
     return projectsStore.active?.slug === slug;
   }
@@ -8,9 +11,6 @@
   async function selectProject(slug: string) {
     await projectsStore.load(slug);
   }
-
-  // CreateProjectModal opens via this flag — Task 13 wires the modal itself.
-  let showCreate = $state(false);
 </script>
 
 <div class="flex items-center gap-1">
@@ -28,7 +28,7 @@
   {/each}
   <button
     class="w-6 py-1 text-xs rounded-full border border-dashed border-ink-600 text-slate-500 hover:border-accent-500 hover:text-accent-400"
-    onclick={() => (showCreate = true)}
+    onclick={onopenCreate}
     title="New project"
   >
     +
