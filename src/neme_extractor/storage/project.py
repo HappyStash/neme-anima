@@ -1,0 +1,95 @@
+"""Project: a folder of input videos + reference images + extracted output.
+
+Layout under the project root:
+
+    project.json
+    refs/                    (link targets; thumbnails cached under .thumbnails/)
+    output/
+      kept/                  (all kept frames, prefixed with <video_stem>__)
+      rejected/
+      metadata.jsonl
+      cache/<video_stem>/    (per-video detection cache, parquet)
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+
+
+@dataclass
+class Source:
+    """An input video tracked by the project."""
+    path: str                         # absolute path to the video file
+    added_at: str                     # ISO-8601 UTC
+    excluded_refs: list[str] = field(default_factory=list)
+    extraction_runs: list[dict] = field(default_factory=list)
+
+
+@dataclass
+class RefImage:
+    """A reference image used for character matching."""
+    path: str
+    added_at: str
+
+
+@dataclass
+class Project:
+    name: str
+    slug: str
+    root: Path
+    created_at: datetime
+    sources: list[Source] = field(default_factory=list)
+    refs: list[RefImage] = field(default_factory=list)
+    thresholds_overrides: dict = field(default_factory=dict)
+
+    # ---------------- factory methods ----------------
+
+    @classmethod
+    def create(cls, root: Path, *, name: str) -> "Project":
+        root = Path(root)
+        if root.exists():
+            raise FileExistsError(f"refusing to overwrite existing folder {root}")
+        slug = root.name
+        now = datetime.now(timezone.utc)
+        project = cls(
+            name=name,
+            slug=slug,
+            root=root,
+            created_at=now,
+        )
+        # Folder skeleton.
+        (root / "refs" / ".thumbnails").mkdir(parents=True)
+        (root / "output" / "kept").mkdir(parents=True)
+        (root / "output" / "rejected").mkdir(parents=True)
+        (root / "output" / "cache").mkdir(parents=True)
+        project.save()
+        return project
+
+    @classmethod
+    def load(cls, root: Path) -> "Project":
+        root = Path(root)
+        with open(root / "project.json") as f:
+            data = json.load(f)
+        return cls(
+            name=data["name"],
+            slug=data["slug"],
+            root=root,
+            created_at=datetime.fromisoformat(data["created_at"]),
+            sources=[Source(**s) for s in data.get("sources", [])],
+            refs=[RefImage(**r) for r in data.get("refs", [])],
+            thresholds_overrides=data.get("thresholds_overrides", {}),
+        )
+
+    def save(self) -> None:
+        out = {
+            "name": self.name,
+            "slug": self.slug,
+            "created_at": self.created_at.isoformat(),
+            "sources": [asdict(s) for s in self.sources],
+            "refs": [asdict(r) for r in self.refs],
+            "thresholds_overrides": self.thresholds_overrides,
+        }
+        (self.root / "project.json").write_text(json.dumps(out, indent=2))
