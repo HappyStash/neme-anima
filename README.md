@@ -72,6 +72,32 @@ uv run neme-extractor project rerun ~/neme-projects/megumin --video ep01
 
 This skips detection + tracking and is roughly 10× faster than a fresh extract.
 
+## Web UI (backend)
+
+A local web server is available alongside the CLI:
+
+```sh
+uv run neme-extractor ui
+```
+
+That binds to `127.0.0.1:<random-port>` and opens your browser. The full Svelte SPA lands in Phase 2B; right now this exposes the backend that drives it:
+
+- REST endpoints under `/api/projects`, `/api/projects/<slug>/sources`, `/api/projects/<slug>/refs`, `/api/projects/<slug>/frames`, `/api/queue`
+- WebSocket at `/api/ws` streaming `queue.update` / `job.progress` / `job.frame` / `job.log` / `job.done` events as JSON
+- Health probe at `/api/health`
+
+You can drive the same flows from `curl`:
+
+```sh
+curl -s http://127.0.0.1:<port>/api/projects | jq
+curl -s -X POST http://127.0.0.1:<port>/api/projects \
+  -H 'Content-Type: application/json' \
+  -d '{"name": "megumin", "folder": "/home/me/projects/megumin"}'
+curl -s -X POST http://127.0.0.1:<port>/api/projects/megumin/sources/0/extract
+```
+
+Project state lives entirely in the project folder; the only server-side file is `~/.neme-extractor/db.sqlite` (the project registry — names, paths, last-opened timestamps).
+
 ## Performance
 
 A 20-min episode at 24 fps lands around 2–3 minutes on a 4090. Four knobs if you want it faster:
