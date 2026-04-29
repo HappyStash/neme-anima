@@ -4,6 +4,11 @@ import { resolve } from "node:path";
 
 export default defineConfig(({ mode }) => ({
   plugins: [svelte()],
+  resolve: {
+    alias: {
+      $lib: resolve(__dirname, "src/lib"),
+    },
+  },
   build: {
     // Build directly into the FastAPI static-files dir.
     outDir: resolve(__dirname, "../src/neme_extractor/server/static"),
