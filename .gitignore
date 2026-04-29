@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.pytest_cache/
+.ruff_cache/
+output/
+tests/fixtures/*.mp4
+tests/fixtures/*.png
+tests/fixtures/*.jpg
+!tests/fixtures/.gitkeep
+.coverage
+*.parquet
+docs/superpowers/
+docs/anima-lora-training-notes.md
