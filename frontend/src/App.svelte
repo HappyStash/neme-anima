@@ -9,6 +9,7 @@
   import FramesTab from "$lib/components/FramesTab.svelte";
   import RegexModal from "$lib/components/RegexModal.svelte";
   import SourcesTab from "$lib/components/SourcesTab.svelte";
+  import SettingsTab from "$lib/components/SettingsTab.svelte";
 
   let conn: Connection | null = null;
   let regexOpen = $state(false);
@@ -55,7 +56,7 @@
       {:else if viewStore.tab === "frames"}
         <FramesTab />
       {:else if viewStore.tab === "settings"}
-        <p class="text-slate-500 mt-8">Settings tab — Task 12.</p>
+        <SettingsTab />
       {/if}
     {:else}
       <div class="flex flex-col items-center justify-center py-32 text-slate-400">
