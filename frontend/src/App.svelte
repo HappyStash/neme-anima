@@ -7,6 +7,7 @@
   import { connectEvents, type Connection } from "$lib/ws";
   import TopStrip from "$lib/components/TopStrip.svelte";
   import FramesTab from "$lib/components/FramesTab.svelte";
+  import RegexModal from "$lib/components/RegexModal.svelte";
 
   let conn: Connection | null = null;
   let regexOpen = $state(false);
@@ -64,14 +65,6 @@
   </main>
 
   {#if regexOpen}
-    <div
-      role="button"
-      tabindex="0"
-      class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
-      onclick={() => (regexOpen = false)}
-      onkeydown={(e) => e.key === "Escape" && (regexOpen = false)}
-    >
-      <p class="text-slate-300">Regex modal — Task 10.</p>
-    </div>
+    <RegexModal onclose={() => (regexOpen = false)} />
   {/if}
 </div>
