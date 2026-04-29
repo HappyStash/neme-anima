@@ -24,42 +24,40 @@ from neme_extractor.video import Video
 
 
 @pytest.fixture
-def refs_dir(tmp_path: Path) -> Path:
-    """A folder with two synthetic reference images."""
-    d = tmp_path / "refs"
-    d.mkdir()
+def ref_paths(tmp_path: Path) -> list[Path]:
+    """Two synthetic reference image PATHS (no enclosing 'refs' dir)."""
     rng = np.random.default_rng(0)
+    paths: list[Path] = []
     for i in range(2):
         arr = rng.integers(0, 256, (256, 256, 3), dtype=np.uint8)
-        Image.fromarray(arr).save(d / f"ref_{i}.png")
-    return d
+        p = tmp_path / f"ref_{i}.png"
+        Image.fromarray(arr).save(p)
+        paths.append(p)
+    return paths
 
 
-def test_identifier_loads_references(refs_dir: Path):
-    ident = Identifier(refs_dir, IdentifyConfig())
+def test_identifier_loads_references(ref_paths: list[Path]):
+    ident = Identifier(ref_paths=ref_paths, cfg=IdentifyConfig())
     assert ident.num_references == 2
     paths = ident.reference_paths()
     assert len(paths) == 2
     assert all(p.exists() for p in paths)
 
 
-def test_identifier_rejects_empty_refs_dir(tmp_path: Path):
-    empty = tmp_path / "empty_refs"
-    empty.mkdir()
-    with pytest.raises(ValueError, match="No reference images"):
-        Identifier(empty, IdentifyConfig())
+def test_identifier_rejects_empty_ref_list():
+    with pytest.raises(ValueError, match="No reference"):
+        Identifier(ref_paths=[], cfg=IdentifyConfig())
 
 
-def test_distance_self_is_near_zero(refs_dir: Path):
+def test_distance_self_is_near_zero(ref_paths: list[Path]):
     """Distance from a reference image to itself should be ~0."""
-    ident = Identifier(refs_dir, IdentifyConfig())
-    # The first ref's pixels.
-    arr = np.array(Image.open(ident.reference_paths()[0]).convert("RGB"))
+    ident = Identifier(ref_paths=ref_paths, cfg=IdentifyConfig())
+    arr = np.array(Image.open(ref_paths[0]).convert("RGB"))
     assert ident.distance(arr) < 1e-3
 
 
-def test_distance_handles_tiny_or_empty_crops(refs_dir: Path):
-    ident = Identifier(refs_dir, IdentifyConfig())
+def test_distance_handles_tiny_or_empty_crops(ref_paths: list[Path]):
+    ident = Identifier(ref_paths=ref_paths, cfg=IdentifyConfig())
     assert ident.distance(np.zeros((0, 0, 3), dtype=np.uint8)) == float("inf")
     assert ident.distance(np.zeros((4, 4, 3), dtype=np.uint8)) == float("inf")
 
@@ -89,12 +87,12 @@ def synthetic_clip(tmp_path: Path) -> Path:
     return p
 
 
-def test_score_tracklet_executes(refs_dir: Path, synthetic_clip: Path):
+def test_score_tracklet_executes(ref_paths: list[Path], synthetic_clip: Path):
     """End-to-end plumbing: build a fake tracklet, score it, get a finite verdict."""
     cfg = IdentifyConfig(sample_frames_per_tracklet=3,
                          body_max_distance_strict=0.10,
                          body_max_distance_loose=0.20)
-    ident = Identifier(refs_dir, cfg)
+    ident = Identifier(ref_paths=ref_paths, cfg=cfg)
     video = Video(synthetic_clip)
 
     items = []
