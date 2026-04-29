@@ -107,3 +107,37 @@ def test_set_excluded_refs_persists(tmp_path: Path):
     p.save()
     reloaded = Project.load(p.root)
     assert reloaded.sources[0].excluded_refs == [str(img.resolve())]
+
+
+def test_effective_refs_excludes_per_video_opt_outs(tmp_path: Path):
+    p = Project.create(tmp_path / "p", name="p")
+    a = tmp_path / "a.png"; a.write_bytes(b"")
+    b = tmp_path / "b.png"; b.write_bytes(b"")
+    c = tmp_path / "c.png"; c.write_bytes(b"")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    p.add_ref(a); p.add_ref(b); p.add_ref(c)
+    p.add_source(vid)
+    p.set_excluded_refs(0, [str(b.resolve())])
+    eff = p.effective_refs_for(0)
+    assert sorted(eff) == sorted([str(a.resolve()), str(c.resolve())])
+
+
+def test_effective_refs_default_is_all_project_refs(tmp_path: Path):
+    p = Project.create(tmp_path / "p", name="p")
+    a = tmp_path / "a.png"; a.write_bytes(b"")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    p.add_ref(a)
+    p.add_source(vid)
+    eff = p.effective_refs_for(0)
+    assert eff == [str(a.resolve())]
+
+
+def test_effective_refs_paths_helpers(tmp_path: Path):
+    p = Project.create(tmp_path / "p", name="p")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    p.add_source(vid)
+    assert p.video_stem(0) == "ep01"
+    assert p.kept_dir == p.root / "output" / "kept"
+    assert p.rejected_dir == p.root / "output" / "rejected"
+    assert p.cache_dir_for("ep01") == p.root / "output" / "cache" / "ep01"
+    assert p.metadata_path == p.root / "output" / "metadata.jsonl"

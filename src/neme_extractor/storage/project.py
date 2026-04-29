@@ -138,3 +138,28 @@ class Project:
         excluded = [str(Path(p).resolve()) for p in excluded]
         self.sources[source_idx].excluded_refs = excluded
         self.save()
+
+    # ---------------- ref-set + path helpers ----------------
+
+    def effective_refs_for(self, source_idx: int) -> list[str]:
+        """All project ref paths minus the per-video opt-outs."""
+        excluded = set(self.sources[source_idx].excluded_refs)
+        return [r.path for r in self.refs if r.path not in excluded]
+
+    def video_stem(self, source_idx: int) -> str:
+        return Path(self.sources[source_idx].path).stem
+
+    @property
+    def kept_dir(self) -> Path:
+        return self.root / "output" / "kept"
+
+    @property
+    def rejected_dir(self) -> Path:
+        return self.root / "output" / "rejected"
+
+    @property
+    def metadata_path(self) -> Path:
+        return self.root / "output" / "metadata.jsonl"
+
+    def cache_dir_for(self, video_stem: str) -> Path:
+        return self.root / "output" / "cache" / video_stem
