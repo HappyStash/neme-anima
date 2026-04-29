@@ -3,11 +3,13 @@
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
   import { queueStore } from "$lib/stores/queue.svelte";
+  import { framesStore } from "$lib/stores/frames.svelte";
   import { connectEvents, type Connection } from "$lib/ws";
   import TopStrip from "$lib/components/TopStrip.svelte";
   import FramesTab from "$lib/components/FramesTab.svelte";
 
   let conn: Connection | null = null;
+  let regexOpen = $state(false);
 
   onMount(async () => {
     await projectsStore.refresh();
@@ -20,15 +22,30 @@
       onEvent: (ev) => queueStore.ingest(ev),
       onStatus: (s) => queueStore.setStatus(s),
     });
+    window.addEventListener("keydown", onKey);
   });
 
   onDestroy(() => {
     conn?.close();
+    window.removeEventListener("keydown", onKey);
   });
+
+  function onKey(ev: KeyboardEvent) {
+    const target = ev.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    if (viewStore.tab !== "frames") return;
+    if (ev.key === "a" && !ev.ctrlKey && !ev.metaKey) {
+      framesStore.selectAll();
+      ev.preventDefault();
+    } else if (ev.key === "d" || ev.key === "Escape") {
+      framesStore.clear();
+      ev.preventDefault();
+    }
+  }
 </script>
 
 <div class="min-h-screen bg-ink-950 text-slate-100">
-  <TopStrip />
+  <TopStrip onopenRegex={() => (regexOpen = true)} />
   <main class="px-4 pb-12">
     {#if projectsStore.active}
       {#if viewStore.tab === "sources"}
@@ -45,4 +62,16 @@
       </div>
     {/if}
   </main>
+
+  {#if regexOpen}
+    <div
+      role="button"
+      tabindex="0"
+      class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
+      onclick={() => (regexOpen = false)}
+      onkeydown={(e) => e.key === "Escape" && (regexOpen = false)}
+    >
+      <p class="text-slate-300">Regex modal — Task 10.</p>
+    </div>
+  {/if}
 </div>
