@@ -95,3 +95,46 @@ class Project:
         tmp = self.root / "project.json.tmp"
         tmp.write_text(json.dumps(out, indent=2))
         tmp.replace(self.root / "project.json")
+
+    # ---------------- mutations ----------------
+
+    def add_source(self, video_path: Path) -> Source:
+        video_path = Path(video_path).resolve()
+        if any(Path(s.path) == video_path for s in self.sources):
+            raise ValueError(f"video already in project: {video_path}")
+        s = Source(
+            path=str(video_path),
+            added_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self.sources.append(s)
+        self.save()
+        return s
+
+    def add_ref(self, ref_path: Path) -> RefImage:
+        ref_path = Path(ref_path).resolve()
+        if any(Path(r.path) == ref_path for r in self.refs):
+            raise ValueError(f"ref already in project: {ref_path}")
+        r = RefImage(
+            path=str(ref_path),
+            added_at=datetime.now(timezone.utc).isoformat(),
+        )
+        self.refs.append(r)
+        self.save()
+        return r
+
+    def remove_source(self, source_idx: int) -> None:
+        del self.sources[source_idx]
+        self.save()
+
+    def remove_ref(self, ref_path: str) -> None:
+        ref_path = str(Path(ref_path).resolve())
+        self.refs = [r for r in self.refs if r.path != ref_path]
+        # Also strip from any source's excluded_refs so dangling references don't accumulate.
+        for s in self.sources:
+            s.excluded_refs = [p for p in s.excluded_refs if p != ref_path]
+        self.save()
+
+    def set_excluded_refs(self, source_idx: int, excluded: list[str]) -> None:
+        excluded = [str(Path(p).resolve()) for p in excluded]
+        self.sources[source_idx].excluded_refs = excluded
+        self.save()
