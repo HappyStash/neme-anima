@@ -25,10 +25,6 @@ from neme_extractor.track import TrackedDetection, Tracklet
 from neme_extractor.video import Scene
 
 
-# Re-export for callers that used to import this name from output.
-ProjectFrameRecord = FrameRecord
-
-
 def _safe_name(video_stem: str, scene_idx: int, tracklet_id: int, frame_idx: int) -> str:
     return f"{video_stem}__s{scene_idx:03d}_t{tracklet_id:03d}_f{frame_idx:06d}"
 

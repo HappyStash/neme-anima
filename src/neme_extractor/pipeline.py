@@ -145,7 +145,7 @@ def run_extract(*, project: Project, source_idx: int) -> None:
                 kept += 1
             p.advance(task)
 
-    console.rule(f"[bold green]done[/bold green]")
+    console.rule("[bold green]done[/bold green]")
     console.print(f"kept: {kept}  rejected: {rejected}  output: {project.kept_dir}")
 
 
@@ -173,6 +173,21 @@ def _save_one_rejected_sample(
     writer.write_rejected(rec, cropped.image_rgb)
 
 
+def _wipe_outputs_for_stem(project: Project, video_stem: str) -> None:
+    """Delete only the kept/rejected files belonging to one video, identified by
+    the ``<video_stem>__`` filename prefix. The trailing double-underscore
+    separator is what makes this safe — a video named ``ep01ext`` produces the
+    prefix ``ep01ext__`` which never collides with ``ep01__``.
+    """
+    prefix = f"{video_stem}__"
+    for d in (project.kept_dir, project.rejected_dir):
+        if not d.exists():
+            continue
+        for f in d.iterdir():
+            if f.name.startswith(prefix):
+                f.unlink()
+
+
 def run_rerun(*, project: Project, video_stem: str) -> None:
     thresholds = _resolve_thresholds(project)
     # Find the source matching this video_stem.
@@ -195,12 +210,7 @@ def run_rerun(*, project: Project, video_stem: str) -> None:
     tagger = Tagger(thresholds.tag)
     ref_features = identifier.reference_features()
 
-    # Wipe previous outputs for THIS video only (filename prefix scopes the delete).
-    prefix = f"{video_stem}__"
-    for d in (project.kept_dir, project.rejected_dir):
-        for f in d.iterdir():
-            if f.name.startswith(prefix):
-                f.unlink()
+    _wipe_outputs_for_stem(project, video_stem)
 
     with _make_progress() as p:
         task = p.add_task("rerun", total=len(tracklets))
@@ -232,4 +242,4 @@ def run_rerun(*, project: Project, video_stem: str) -> None:
                 )
                 writer.write_kept(rec, cropped.image_rgb, tag_res.text)
             p.advance(task)
-    console.rule(f"[bold green]rerun done[/bold green]")
+    console.rule("[bold green]rerun done[/bold green]")

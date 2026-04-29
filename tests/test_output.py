@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 
-from neme_extractor.output import OutputWriter, ProjectFrameRecord
+from neme_extractor.output import OutputWriter
 from neme_extractor.storage.metadata import FrameRecord, MetadataLog
 from neme_extractor.storage.project import Project
 
