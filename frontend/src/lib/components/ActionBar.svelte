@@ -61,23 +61,41 @@
     const filenames = framesStore.selectedFilenames();
     if (filenames.length === 0) return;
     retagBusy = true;
+    // Process one frame at a time so the user gets per-frame feedback (badge
+    // pop) as descriptions are written, and so each LLM call uses a fresh
+    // chat-completions context (no carry-over between images). Errors
+    // accumulate but don't abort the rest of the batch — a stuck endpoint
+    // shouldn't black-hole an N-frame queue silently, but we surface a
+    // single summary alert at the end if anything actually failed.
+    let described = 0;
+    let lastError: string | null = null;
     try {
-      const res = await api.bulkRetagLLM(slug, filenames);
-      // Refresh so each FrameThumb's `frame.has_description` flips to true
-      // and the at-a-glance badge appears without the user having to navigate
-      // away and back.
-      await framesStore.refresh(
-        slug,
-        viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {},
-      );
-      const msg = res.error
-        ? `Described ${res.described} of ${res.total}. Last error: ${res.error}`
-        : `Described ${res.described} of ${res.total} frame${res.total === 1 ? "" : "s"}.`;
-      alert(msg);
-    } catch (e) {
-      alert(`LLM tagging failed: ${e instanceof Error ? e.message : String(e)}`);
+      for (const filename of filenames) {
+        try {
+          const res = await api.bulkRetagLLM(slug, [filename]);
+          if (res.described > 0) {
+            // The backend silently retargets to a `_crop` derivative when
+            // one exists, so pop the badge on the row that actually got
+            // written rather than the one the user clicked.
+            const eff = res.effective_filenames?.[0] ?? filename;
+            framesStore.markDescribed(eff);
+            described += 1;
+          } else if (res.error) {
+            lastError = res.error;
+          }
+        } catch (e) {
+          lastError = e instanceof Error ? e.message : String(e);
+        }
+      }
     } finally {
       retagBusy = false;
+    }
+    // Only alert when something went wrong — the success path is
+    // communicated visually by the per-frame badge pop animation.
+    if (described < filenames.length) {
+      const failed = filenames.length - described;
+      const detail = lastError ? ` Last error: ${lastError}` : "";
+      alert(`Described ${described} of ${filenames.length}; ${failed} failed.${detail}`);
     }
   }
 

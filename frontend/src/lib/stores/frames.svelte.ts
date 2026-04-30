@@ -7,15 +7,36 @@ class FramesStore {
   loading = $state(false);
   selection = new SelectionModel();
   selectionVersion = $state(0); // bump to force reactivity for selection changes
+  // Per-filename counter bumped each time an LLM description finishes for a
+  // frame. FrameThumb watches its own filename's value and runs the badge-pop
+  // animation on every tick. We use a counter (not a boolean) so re-describing
+  // an already-described frame still triggers the animation as feedback.
+  describedVersion = $state<Map<string, number>>(new Map());
 
   async refresh(slug: string, opts: { source?: string } = {}) {
     this.loading = true;
     try {
       const page = await api.listFrames(slug, opts);
       this.items = page.items;
+      // Drop describedVersion on refresh — a different filter or project
+      // could reuse filenames coincidentally, and we never want a stale
+      // bump from a previous view to fire animations on a fresh tile.
+      this.describedVersion = new Map();
     } finally {
       this.loading = false;
     }
+  }
+
+  /** Mark a frame as freshly described: flip its has_description and bump the
+   *  per-filename counter so FrameThumb runs its pop animation. */
+  markDescribed(filename: string) {
+    const idx = this.items.findIndex((i) => i.filename === filename);
+    if (idx >= 0 && !this.items[idx].has_description) {
+      this.items[idx] = { ...this.items[idx], has_description: true };
+    }
+    const next = new Map(this.describedVersion);
+    next.set(filename, (next.get(filename) ?? 0) + 1);
+    this.describedVersion = next;
   }
 
   ingest(event: ServerEvent) {

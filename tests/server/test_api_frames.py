@@ -195,6 +195,195 @@ async def test_bulk_retag_llm_422_when_no_model(
     assert resp.status_code == 422
 
 
+async def test_bulk_retag_danbooru_prefers_crop_derivative(
+    client, app, project_with_frames: Project,
+):
+    """When a `_crop` derivative is on disk for an original, the WD14
+    tagger must run on the cropped pixels and write the cropped sidecar.
+    Tagging the wide shot would produce labels that don't match the image
+    the trainer actually sees."""
+    name = "ep01__s000_t001_f000010"
+    # Distinct pixel values so the fake tagger can prove which image it saw.
+    original = np.full((128, 128, 3), 200, dtype=np.uint8)
+    crop = np.full((64, 64, 3), 50, dtype=np.uint8)
+    Image.fromarray(original).save(project_with_frames.kept_dir / f"{name}.png")
+    Image.fromarray(crop).save(project_with_frames.kept_dir / f"{name}_crop.png")
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "untouched, original_tags\nold_orig_caption\n", encoding="utf-8",
+    )
+    (project_with_frames.kept_dir / f"{name}_crop.txt").write_text(
+        "stale_crop_tags\nkeep_this_caption\n", encoding="utf-8",
+    )
+
+    seen_pixel_means: list[float] = []
+
+    class FakeTagger:
+        def tag(self, arr):
+            seen_pixel_means.append(float(arr.mean()))
+
+            class Result:
+                text = "from_crop_image"
+
+            return Result()
+
+    app.state._tagger = FakeTagger()
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-retag-danbooru",
+        json={"filenames": [name]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["retagged"] == 1
+    assert body["effective_filenames"] == [f"{name}_crop"]
+
+    # The tagger saw the crop's pixels (~50), not the original's (~200).
+    assert seen_pixel_means and seen_pixel_means[0] < 100
+
+    # Crop sidecar updated; keeps the existing description on row 2.
+    crop_txt = (project_with_frames.kept_dir / f"{name}_crop.txt").read_text(
+        encoding="utf-8",
+    )
+    assert crop_txt.startswith("from_crop_image\n")
+    assert "keep_this_caption" in crop_txt
+
+    # Original sidecar untouched — each sidecar describes its own image.
+    orig_txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(
+        encoding="utf-8",
+    )
+    assert orig_txt.startswith("untouched, original_tags\n")
+
+
+async def test_bulk_retag_danbooru_uses_original_when_no_crop(
+    client, app, project_with_frames: Project,
+):
+    """Sanity: original-only frames keep the existing single-sidecar
+    behavior — the retarget rule only kicks in when a crop sibling exists."""
+    name = "ep01__s000_t001_f000010"
+
+    class FakeTagger:
+        def tag(self, arr):  # noqa: D401, ARG002
+            class Result:
+                text = "wd14_only"
+
+            return Result()
+
+    app.state._tagger = FakeTagger()
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-retag-danbooru",
+        json={"filenames": [name]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["effective_filenames"] == [name]
+    txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert txt.startswith("wd14_only\n")
+
+
+async def test_bulk_retag_llm_prefers_crop_derivative(
+    client, project_with_frames: Project, monkeypatch,
+):
+    """Same retarget rule for the LLM path: the description must come from
+    the crop's pixels and land in the crop's sidecar so the trained-against
+    image and its caption stay coherent."""
+    name = "ep01__s000_t001_f000010"
+
+    # Configure a model so the route gets past its 422 guard.
+    project_with_frames.llm.enabled = True
+    project_with_frames.llm.model = "fake-model"
+    project_with_frames.llm.endpoint = "http://localhost:1234"
+    project_with_frames.save()
+
+    original = np.full((128, 128, 3), 200, dtype=np.uint8)
+    crop = np.full((64, 64, 3), 50, dtype=np.uint8)
+    Image.fromarray(original).save(project_with_frames.kept_dir / f"{name}.png")
+    Image.fromarray(crop).save(project_with_frames.kept_dir / f"{name}_crop.png")
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "orig_tags\nold_orig_caption\n", encoding="utf-8",
+    )
+    (project_with_frames.kept_dir / f"{name}_crop.txt").write_text(
+        "crop_tags\n", encoding="utf-8",
+    )
+
+    seen_image_paths: list[Path] = []
+    seen_danbooru: list[str | None] = []
+
+    def fake_describe_image(*, endpoint, model, image_path, prompt, danbooru_tags):
+        seen_image_paths.append(image_path)
+        seen_danbooru.append(danbooru_tags)
+        return "Description of the cropped subject."
+
+    monkeypatch.setattr(
+        "neme_extractor.llm.describe_image", fake_describe_image,
+    )
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-retag-llm",
+        json={"filenames": [name]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["described"] == 1
+    assert body["effective_filenames"] == [f"{name}_crop"]
+
+    # describe_image was passed the crop's PNG path, not the original.
+    assert seen_image_paths == [
+        project_with_frames.kept_dir / f"{name}_crop.png",
+    ]
+    # Danbooru hint comes from the crop's sidecar, not the original's.
+    assert seen_danbooru == ["crop_tags"]
+
+    # Crop sidecar got the description; tag line preserved.
+    crop_txt = (project_with_frames.kept_dir / f"{name}_crop.txt").read_text(
+        encoding="utf-8",
+    )
+    assert crop_txt.startswith("crop_tags\n")
+    assert "Description of the cropped subject." in crop_txt
+
+    # Original sidecar untouched.
+    orig_txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(
+        encoding="utf-8",
+    )
+    assert orig_txt == "orig_tags\nold_orig_caption\n"
+
+
+async def test_bulk_retag_llm_skips_resolve_for_crop_filename(
+    client, project_with_frames: Project, monkeypatch,
+):
+    """When the user selects a `_crop` filename directly, we must NOT
+    chase a `_crop_crop` ghost — the literal frame is the right target."""
+    name = "ep01__s000_t001_f000010"
+    crop_name = f"{name}_crop"
+
+    project_with_frames.llm.enabled = True
+    project_with_frames.llm.model = "fake-model"
+    project_with_frames.save()
+
+    crop = np.full((64, 64, 3), 80, dtype=np.uint8)
+    Image.fromarray(crop).save(project_with_frames.kept_dir / f"{crop_name}.png")
+    (project_with_frames.kept_dir / f"{crop_name}.txt").write_text(
+        "crop_tags\n", encoding="utf-8",
+    )
+
+    captured: list[Path] = []
+
+    def fake_describe_image(*, endpoint, model, image_path, prompt, danbooru_tags):
+        captured.append(image_path)
+        return "ok"
+
+    monkeypatch.setattr(
+        "neme_extractor.llm.describe_image", fake_describe_image,
+    )
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-retag-llm",
+        json={"filenames": [crop_name]},
+    )
+    assert resp.status_code == 200
+    assert resp.json()["effective_filenames"] == [crop_name]
+    assert captured == [project_with_frames.kept_dir / f"{crop_name}.png"]
+
+
 async def test_list_frames_has_description_flag(
     client, project_with_frames: Project,
 ):

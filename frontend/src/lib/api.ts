@@ -188,13 +188,27 @@ export const bulkTagsReplace = (
 );
 
 export const bulkRetagDanbooru = (slug: string, filenames: string[]) =>
-  request<{ retagged: number; total: number }>(
+  request<{
+    retagged: number;
+    total: number;
+    /** Parallel to the request `filenames`. Entry differs from the input
+     *  when a `_crop` derivative was tagged in place of the original. */
+    effective_filenames: (string | null)[];
+  }>(
     `/api/projects/${encodeURIComponent(slug)}/frames/bulk-retag-danbooru`,
     { method: "POST", body: JSON.stringify({ filenames }) },
   );
 
 export const bulkRetagLLM = (slug: string, filenames: string[]) =>
-  request<{ described: number; total: number; error: string | null }>(
+  request<{
+    described: number;
+    total: number;
+    error: string | null;
+    /** Parallel to the request `filenames`. Entry is null when that
+     *  filename failed; differs from the input when a `_crop` derivative
+     *  was described in place of the original. */
+    effective_filenames: (string | null)[];
+  }>(
     `/api/projects/${encodeURIComponent(slug)}/frames/bulk-retag-llm`,
     { method: "POST", body: JSON.stringify({ filenames }) },
   );

@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "$lib/api";
+  import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import type { FrameRecord } from "$lib/types";
   import DescriptionModal from "./DescriptionModal.svelte";
@@ -40,6 +41,36 @@
   let addingTag = $state(false);
 
   let descriptionModalOpen = $state(false);
+
+  // One-shot pop animation on the description badge. Driven by a per-filename
+  // version counter in framesStore that ActionBar bumps when a single-frame
+  // LLM describe call completes. We capture the counter the first time we
+  // see a given filename so already-described frames don't pop on initial
+  // render or when this component instance is reused for a different tile.
+  let popping = $state(false);
+  let popTimer: ReturnType<typeof setTimeout> | null = null;
+  let lastSeenFilename: string | null = null;
+  let popBaseline = 0;
+
+  $effect(() => {
+    const fn = frame.filename;
+    const v = framesStore.describedVersion.get(fn) ?? 0;
+    if (lastSeenFilename !== fn) {
+      // First run for this filename — capture baseline silently.
+      lastSeenFilename = fn;
+      popBaseline = v;
+      return;
+    }
+    if (v > popBaseline) {
+      popBaseline = v;
+      if (popTimer) clearTimeout(popTimer);
+      popping = false;
+      // Force a tick so the class toggle restarts the animation when the
+      // same frame is popped twice in quick succession.
+      requestAnimationFrame(() => { popping = true; });
+      popTimer = setTimeout(() => { popping = false; }, 560);
+    }
+  });
 
   async function loadTags() {
     if (tagText !== null) return;
@@ -193,7 +224,7 @@
       onclick={openDescriptionModal}
       title={badgeTitle}
       aria-label="Edit description"
-      class="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-accent-500/40 hover:bg-accent-500/60 text-white/90 flex items-center justify-center z-20 cursor-help transition-colors"
+      class="absolute top-1.5 left-1.5 w-5 h-5 rounded-full bg-accent-500/40 hover:bg-accent-500/60 text-white/90 flex items-center justify-center z-20 cursor-help transition-colors {popping ? 'badge-pop' : ''}"
     >
       <svg viewBox="0 0 16 16" class="w-3 h-3" fill="currentColor" aria-hidden="true">
         <path d="M3 3h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 12H7.4l-3 2.4a.5.5 0 0 1-.8-.4V12H3a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 3 3z"/>

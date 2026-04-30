@@ -77,6 +77,31 @@ def _frame_paths(project: Project, filename: str) -> tuple[Path, Path]:
             project.kept_dir / f"{filename}.txt")
 
 
+def _resolve_tag_target(
+    project: Project, filename: str,
+) -> tuple[Path, Path, str]:
+    """Pick the (image, sidecar, effective_filename) the WD14/LLM taggers
+    should operate on.
+
+    Why this exists: the user may have cropped a frame to focus the trained-
+    against region. The crop derivative lives at ``{filename}_crop.png`` and
+    is what the dataset actually carries forward. Tagging the original wide
+    shot would mis-describe pixels that the model never sees, so when a
+    derivative is on disk for an original filename we transparently retarget
+    to it. Sidecars stay paired with their own image — the original's
+    sidecar is left untouched.
+
+    If ``filename`` is itself a ``_crop`` derivative, we always use it as-is
+    (no double-resolve to a ``_crop_crop`` ghost).
+    """
+    if not filename.endswith(CROP_SUFFIX):
+        deriv_png, deriv_txt, _spec = _crop_paths(project, filename)
+        if deriv_png.is_file():
+            return deriv_png, deriv_txt, deriv_png.stem
+    png, txt = _frame_paths(project, filename)
+    return png, txt, filename
+
+
 @router.get("/{slug}/frames")
 async def list_frames(
     request: Request, slug: str,
@@ -282,27 +307,41 @@ async def bulk_retag_danbooru(
     project = _load(request, slug)
     tagger = _get_or_make_tagger(request)
 
-    def _tag_one(filename: str) -> bool:
-        png, txt = _frame_paths(project, filename)
-        if not png.exists():
-            return False
+    def _tag_one(filename: str) -> tuple[bool, str | None]:
+        # Prefer the cropped derivative when one exists for an original.
+        # Tags must describe the image we actually train against; tagging
+        # a wide shot with a person who isn't in the crop is exactly the
+        # bug this avoids.
+        png, txt, eff = _resolve_tag_target(project, filename)
+        if not png.is_file():
+            return False, None
         with Image.open(png) as im:
             arr = np.array(im.convert("RGB"))
         new_danbooru = tagger.tag(arr).text
         old_text = txt.read_text(encoding="utf-8") if txt.exists() else ""
         _, description = split_sidecar(old_text)
         txt.write_text(join_sidecar(new_danbooru, description), encoding="utf-8")
-        return True
+        return True, eff
 
     retagged = 0
+    effective_filenames: list[str | None] = []
     for filename in body.filenames:
         try:
-            ok = await asyncio.to_thread(_tag_one, filename)
+            ok, eff = await asyncio.to_thread(_tag_one, filename)
         except Exception:
-            ok = False
+            ok, eff = False, None
         if ok:
             retagged += 1
-    return {"retagged": retagged, "total": len(body.filenames)}
+        effective_filenames.append(eff)
+    return {
+        "retagged": retagged,
+        "total": len(body.filenames),
+        # Parallel to body.filenames; an entry differs from the input when
+        # a `_crop` derivative was tagged in place of the original. The
+        # frontend uses this to flip badges on the row that actually got
+        # written rather than the row the user clicked.
+        "effective_filenames": effective_filenames,
+    }
 
 
 @router.post("/{slug}/frames/bulk-retag-llm")
@@ -326,10 +365,13 @@ async def bulk_retag_llm(
     model = project.llm.model
     prompt = project.llm.prompt or DEFAULT_PROMPT
 
-    def _describe_one(filename: str) -> tuple[bool, str | None]:
-        png, txt = _frame_paths(project, filename)
-        if not png.exists():
-            return False, None
+    def _describe_one(filename: str) -> tuple[bool, str | None, str | None]:
+        # Same retarget rule as the WD14 path: when a crop exists for an
+        # original, describe the crop instead. Otherwise the LLM caption
+        # would describe pixels the trainer never sees.
+        png, txt, eff = _resolve_tag_target(project, filename)
+        if not png.is_file():
+            return False, None, None
         old_text = txt.read_text(encoding="utf-8") if txt.exists() else ""
         danbooru, _ = split_sidecar(old_text)
         try:
@@ -338,22 +380,28 @@ async def bulk_retag_llm(
                 prompt=prompt, danbooru_tags=danbooru or None,
             )
         except LLMUnavailable as exc:
-            return False, str(exc)
+            return False, str(exc), eff
         txt.write_text(join_sidecar(danbooru, description), encoding="utf-8")
-        return True, None
+        return True, None, eff
 
     described = 0
     last_error: str | None = None
+    effective_filenames: list[str | None] = []
     for filename in body.filenames:
-        ok, err = await asyncio.to_thread(_describe_one, filename)
+        ok, err, eff = await asyncio.to_thread(_describe_one, filename)
         if ok:
             described += 1
         elif err:
             last_error = err
+        effective_filenames.append(eff if ok else None)
     return {
         "described": described,
         "total": len(body.filenames),
         "error": last_error,
+        # Parallel to body.filenames; entry is None when that filename
+        # failed. When the crop took priority over the original, the entry
+        # is the crop's filename so the frontend pops the right row.
+        "effective_filenames": effective_filenames,
     }
 
 
