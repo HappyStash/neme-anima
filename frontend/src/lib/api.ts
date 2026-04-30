@@ -55,6 +55,21 @@ export const addSources = (slug: string, paths: string[]) =>
     { method: "POST", body: JSON.stringify({ paths }) },
   );
 
+export const importSourcesFolder = (slug: string, folder: string) =>
+  request<{ added: string[]; skipped: string[]; source_root: string }>(
+    `/api/projects/${encodeURIComponent(slug)}/sources/import-folder`,
+    { method: "POST", body: JSON.stringify({ folder }) },
+  );
+
+export const reimportSources = (slug: string) =>
+  request<{ added: string[]; skipped: string[]; source_root: string }>(
+    `/api/projects/${encodeURIComponent(slug)}/sources/reimport`,
+    { method: "POST" },
+  );
+
+export const sourceThumbnailUrl = (slug: string, idx: number) =>
+  `/api/projects/${encodeURIComponent(slug)}/sources/${idx}/thumbnail`;
+
 export const removeSource = (slug: string, idx: number) =>
   request<void>(`/api/projects/${encodeURIComponent(slug)}/sources/${idx}`, { method: "DELETE" });
 
@@ -83,6 +98,26 @@ export const addRefs = (slug: string, paths: string[]) =>
     `/api/projects/${encodeURIComponent(slug)}/refs`,
     { method: "POST", body: JSON.stringify({ paths }) },
   );
+
+export const refImageUrl = (slug: string, refPath: string): string => {
+  const name = refPath.split("/").pop() ?? refPath;
+  return `/api/projects/${encodeURIComponent(slug)}/refs/${encodeURIComponent(name)}/image`;
+};
+
+export const uploadRefs = async (slug: string, files: File[]) => {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f, f.name);
+  const resp = await fetch(
+    `/api/projects/${encodeURIComponent(slug)}/refs/upload`,
+    { method: "POST", body: fd },
+  );
+  if (!resp.ok) {
+    let detail: unknown = null;
+    try { detail = await resp.json(); } catch { /* body not JSON */ }
+    throw new ApiError(resp.status, detail);
+  }
+  return resp.json() as Promise<{ added: string[]; skipped: string[] }>;
+};
 
 export const removeRef = (slug: string, path: string) =>
   request<void>(`/api/projects/${encodeURIComponent(slug)}/refs`, {

@@ -1,53 +1,152 @@
 <script lang="ts">
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
-  import DropZone from "./DropZone.svelte";
   import VideoRow from "./VideoRow.svelte";
 
-  async function addVideos(paths: string[]) {
+  let importing = $state(false);
+  let uploading = $state(false);
+  let imageDragOver = $state(false);
+  let fileInput: HTMLInputElement | undefined = $state();
+
+  async function pickVideoFolder() {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
-    await api.addSources(slug, paths);
-    await projectsStore.load(slug);
+    const current = projectsStore.active?.source_root ?? "";
+    const folder = prompt(
+      "Paste an absolute folder path. All video files in it will be added (.mkv, .mp4, .webm, …).",
+      current,
+    );
+    if (!folder) return;
+    importing = true;
+    try {
+      await api.importSourcesFolder(slug, folder.trim());
+      await projectsStore.load(slug);
+    } finally {
+      importing = false;
+    }
   }
 
-  async function addRefs(paths: string[]) {
+  async function reimport() {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
-    await api.addRefs(slug, paths);
-    await projectsStore.load(slug);
+    importing = true;
+    try {
+      await api.reimportSources(slug);
+      await projectsStore.load(slug);
+    } finally {
+      importing = false;
+    }
+  }
+
+  async function uploadImageFiles(files: File[]) {
+    const slug = projectsStore.active?.slug;
+    if (!slug || files.length === 0) return;
+    const images = files.filter((f) => f.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name));
+    if (images.length === 0) {
+      alert("No image files in the drop.");
+      return;
+    }
+    uploading = true;
+    try {
+      await api.uploadRefs(slug, images);
+      await projectsStore.load(slug);
+    } finally {
+      uploading = false;
+    }
+  }
+
+  function handleImageDrop(ev: DragEvent) {
+    ev.preventDefault();
+    imageDragOver = false;
+    const files = Array.from(ev.dataTransfer?.files ?? []);
+    void uploadImageFiles(files);
+  }
+
+  function handleImagePick(ev: Event) {
+    const input = ev.currentTarget as HTMLInputElement;
+    const files = Array.from(input.files ?? []);
+    void uploadImageFiles(files);
+    input.value = "";
   }
 
   async function removeRef(path: string) {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
     const name = path.split("/").pop() ?? path;
-    if (!confirm(`Remove reference image “${name}” from this project?`)) return;
+    if (!confirm(`Remove reference image “${name}” from this project? The file will be deleted.`)) return;
     await api.removeRef(slug, path);
     await projectsStore.load(slug);
   }
 
-  function gradientFor(path: string): string {
-    let hash = 0;
-    for (let i = 0; i < path.length; i++) hash = (hash * 31 + path.charCodeAt(i)) >>> 0;
-    const hue = hash % 360;
-    return `linear-gradient(135deg, hsl(${hue}, 60%, 65%), hsl(${(hue + 40) % 360}, 70%, 35%))`;
-  }
+  let sourceRootShort = $derived.by(() => {
+    const r = projectsStore.active?.source_root;
+    if (!r) return "";
+    const parts = r.split("/").filter(Boolean);
+    return parts.slice(-2).join("/");
+  });
 </script>
 
 <div class="mt-4">
   <div class="grid grid-cols-2 gap-3 mb-4">
-    <DropZone
-      title="Drop video files here"
-      subtitle=".mkv · .mp4 · .webm — paths saved, files not copied"
-      icon="▶"
-      onpaths={addVideos}
-    />
-    <DropZone
-      title="Drop reference images here"
-      subtitle="One portrait is usually enough; more refs improve recall"
-      icon="◇"
-      onpaths={addRefs}
+    <!-- Videos: folder picker + reimport in one zone -->
+    <div class="bg-ink-900 border-2 border-dashed border-ink-700 rounded-xl px-4 py-4 flex items-center gap-3.5 hover:border-accent-500 transition-all">
+      <button
+        type="button"
+        onclick={pickVideoFolder}
+        disabled={importing || !projectsStore.active}
+        class="flex items-center gap-3.5 flex-1 text-left disabled:opacity-50"
+      >
+        <div class="w-9 h-9 rounded-lg gradient-accent flex items-center justify-center text-white text-lg shadow-[0_2px_12px_rgba(99,102,241,0.3)] flex-shrink-0">
+          ▶
+        </div>
+        <div class="flex-1 min-w-0">
+          <p class="text-slate-200 text-sm font-medium">{importing ? "Scanning folder…" : "Add videos from folder…"}</p>
+          <p class="text-slate-500 text-xs mt-0.5 truncate">
+            {#if projectsStore.active?.source_root}
+              Last: <span class="font-mono">{sourceRootShort}</span>
+            {:else}
+              .mkv · .mp4 · .webm — files stay in place
+            {/if}
+          </p>
+        </div>
+      </button>
+      {#if projectsStore.active?.source_root}
+        <button
+          type="button"
+          onclick={reimport}
+          disabled={importing}
+          title="Re-scan {projectsStore.active.source_root} for missing videos"
+          class="px-3 py-1.5 text-xs rounded bg-ink-800 hover:bg-ink-700 text-slate-300 border border-ink-700 disabled:opacity-50 flex-shrink-0"
+        >Reimport</button>
+      {/if}
+    </div>
+
+    <!-- Images: drop or click to pick; bytes are uploaded into the project -->
+    <button
+      type="button"
+      ondragover={(e) => { e.preventDefault(); imageDragOver = true; }}
+      ondragleave={() => (imageDragOver = false)}
+      ondrop={handleImageDrop}
+      onclick={() => fileInput?.click()}
+      disabled={uploading || !projectsStore.active}
+      class="w-full text-left bg-ink-900 border-2 border-dashed rounded-xl px-4 py-4 transition-all flex items-center gap-3.5 disabled:opacity-50
+        {imageDragOver ? 'border-accent-500 bg-ink-800 shadow-[0_0_24px_rgba(99,102,241,0.15)]' : 'border-ink-700 hover:border-accent-500'}"
+    >
+      <div class="w-9 h-9 rounded-lg gradient-accent flex items-center justify-center text-white text-lg shadow-[0_2px_12px_rgba(99,102,241,0.3)] flex-shrink-0">
+        ◇
+      </div>
+      <div class="flex-1 min-w-0">
+        <p class="text-slate-200 text-sm font-medium">{uploading ? "Uploading…" : "Drop reference images here"}</p>
+        <p class="text-slate-500 text-xs mt-0.5">Files are copied into the project; click to pick.</p>
+      </div>
+    </button>
+    <input
+      bind:this={fileInput}
+      type="file"
+      accept="image/*"
+      multiple
+      class="hidden"
+      onchange={handleImagePick}
     />
   </div>
 
@@ -59,7 +158,13 @@
         <div class="flex gap-1.5 flex-1 flex-wrap">
           {#each projectsStore.active.refs as r (r.path)}
             <div class="relative group w-9 h-9">
-              <div class="w-9 h-9 rounded" title={r.path} style="background: {gradientFor(r.path)}"></div>
+              <img
+                src={api.refImageUrl(projectsStore.active.slug, r.path)}
+                alt={r.path.split('/').pop() ?? ''}
+                title={r.path}
+                loading="lazy"
+                class="w-9 h-9 rounded object-cover bg-ink-800 border border-ink-700"
+              />
               <button
                 type="button"
                 onclick={() => removeRef(r.path)}
@@ -75,7 +180,7 @@
 
     <p class="text-[10px] uppercase text-slate-500 tracking-wide mb-2">videos in this project</p>
     {#if projectsStore.active.sources.length === 0}
-      <p class="text-slate-500 text-sm py-8 text-center">No videos yet. Drop some above.</p>
+      <p class="text-slate-500 text-sm py-8 text-center">No videos yet. Pick a folder above.</p>
     {:else}
       {#each projectsStore.active.sources as s, i (s.path)}
         <VideoRow source={s} sourceIdx={i} projectRefs={projectsStore.active.refs} />

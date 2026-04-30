@@ -41,6 +41,7 @@ def _project_view(project: Project) -> dict:
         "sources": [asdict(s) for s in project.sources],
         "refs": [asdict(r) for r in project.refs],
         "thresholds_overrides": project.thresholds_overrides,
+        "source_root": project.source_root,
     }
 
 

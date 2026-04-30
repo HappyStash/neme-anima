@@ -20,6 +20,7 @@ export interface ProjectView {
   sources: Source[];
   refs: RefImage[];
   thresholds_overrides: Record<string, Record<string, unknown>>;
+  source_root: string | null;
 }
 
 export interface ProjectListEntry {
