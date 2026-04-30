@@ -24,7 +24,13 @@ def _load(request: Request, slug: str) -> Project:
     entry = request.app.state.registry.get(slug)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"unknown project: {slug}")
-    return Project.load(Path(entry.folder))
+    try:
+        return Project.load(Path(entry.folder))
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"project files missing for {slug!r} at {entry.folder}",
+        )
 
 
 @router.post("/{slug}/sources")

@@ -91,22 +91,30 @@ async def register_existing(request: Request, body: RegisterBody) -> dict:
     return _project_view(project)
 
 
-@router.get("/{slug}")
-async def get_project(request: Request, slug: str) -> dict:
+def _load_or_404(request: Request, slug: str) -> Project:
     entry = request.app.state.registry.get(slug)
     if entry is None:
         raise HTTPException(status_code=404, detail=f"unknown project: {slug}")
-    project = Project.load(Path(entry.folder))
+    try:
+        return Project.load(Path(entry.folder))
+    except FileNotFoundError:
+        raise HTTPException(
+            status_code=404,
+            detail=f"project files missing for {slug!r} at {entry.folder} — "
+                   "folder was moved or deleted; remove the registry entry or restore the files",
+        )
+
+
+@router.get("/{slug}")
+async def get_project(request: Request, slug: str) -> dict:
+    project = _load_or_404(request, slug)
     request.app.state.registry.touch(slug)
     return _project_view(project)
 
 
 @router.patch("/{slug}")
 async def patch_project(request: Request, slug: str, body: PatchProjectBody) -> dict:
-    entry = request.app.state.registry.get(slug)
-    if entry is None:
-        raise HTTPException(status_code=404, detail=f"unknown project: {slug}")
-    project = Project.load(Path(entry.folder))
+    project = _load_or_404(request, slug)
     if body.name is not None:
         project.name = body.name
     if body.thresholds_overrides is not None:

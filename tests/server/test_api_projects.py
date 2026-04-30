@@ -66,6 +66,18 @@ async def test_get_missing_returns_404(client):
     assert resp.status_code == 404
 
 
+async def test_get_registered_but_files_deleted_returns_404(client, tmp_path: Path):
+    """Registry entry survives but project folder/files are gone — must 404, not 500."""
+    import shutil
+    folder = tmp_path / "p"
+    Project.create(folder, name="p")
+    await client.post("/api/projects/register", json={"folder": str(folder)})
+    shutil.rmtree(folder)
+    resp = await client.get("/api/projects/p")
+    assert resp.status_code == 404, resp.text
+    assert "p" in resp.json()["detail"]
+
+
 async def test_patch_thresholds_overrides(client, tmp_path: Path):
     Project.create(tmp_path / "p", name="p")
     await client.post("/api/projects/register", json={"folder": str(tmp_path / "p")})
