@@ -77,6 +77,33 @@ async def test_patch_excluded_refs(client, project: Project, tmp_path: Path):
     assert reloaded.sources[0].excluded_refs == [str(img.resolve())]
 
 
+async def test_add_source_accepts_file_uri(client, project: Project, tmp_path: Path):
+    vid = tmp_path / "Show E01.mkv"
+    vid.write_bytes(b"")
+    uri = f"file://{vid.as_posix().replace(' ', '%20')}"
+    resp = await client.post(
+        f"/api/projects/{project.slug}/sources",
+        json={"paths": [uri]},
+    )
+    assert resp.status_code == 200
+    reloaded = Project.load(project.root)
+    assert len(reloaded.sources) == 1
+    assert Path(reloaded.sources[0].path) == vid.resolve()
+
+
+async def test_add_source_skips_browser_vfs_sentinel(client, project: Project):
+    # When the browser hides the path, the frontend may still send the vfs:// fallback;
+    # the server should reject it cleanly rather than try to open a junk path.
+    resp = await client.post(
+        f"/api/projects/{project.slug}/sources",
+        json={"paths": ["vfs://Classroom of the Elite - S03E11 [1080p].mkv"]},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["added"] == []
+    assert "vfs://" in body["skipped"][0]
+
+
 async def test_extract_enqueues_job(client, project: Project, tmp_path: Path):
     vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
     img = tmp_path / "ref.png"; img.write_bytes(b"")

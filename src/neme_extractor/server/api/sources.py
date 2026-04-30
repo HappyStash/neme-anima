@@ -7,6 +7,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from neme_extractor.server.paths import normalize_input_path
 from neme_extractor.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["sources"])
@@ -40,10 +41,15 @@ async def add_sources(request: Request, slug: str, body: AddSourcesBody) -> dict
     skipped: list[str] = []
     for p in body.paths:
         try:
-            s = project.add_source(Path(p).expanduser())
+            normalized = normalize_input_path(p)
+        except ValueError:
+            skipped.append(p)
+            continue
+        try:
+            s = project.add_source(normalized)
             added.append(s.path)
         except ValueError:
-            skipped.append(str(Path(p).expanduser().resolve()))
+            skipped.append(str(normalized.resolve()))
     return {"added": added, "skipped": skipped}
 
 
