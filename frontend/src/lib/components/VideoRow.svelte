@@ -66,7 +66,11 @@
   let actionsDisabled = $derived(busy || pipelineActive);
 </script>
 
-<div class="bg-ink-900 border border-ink-700 rounded-xl px-3 py-3 mb-2.5 grid grid-cols-[auto_1fr_auto_auto] gap-3 items-center hover:border-ink-600">
+<div
+  class="bg-ink-900 border rounded-xl px-3 py-3 mb-2.5 grid grid-cols-[auto_1fr_auto_auto] gap-3 items-center
+    {source.extracted ? 'border-emerald-500/70 hover:border-emerald-400' : 'border-ink-700 hover:border-ink-600'}"
+  title={source.extracted ? 'Already extracted (frames on disk)' : ''}
+>
   <!-- Thumbnail (left). Falls back to a play glyph if extraction fails. -->
   <div class="w-24 h-14 rounded overflow-hidden bg-ink-950 border border-ink-800 flex-shrink-0 flex items-center justify-center">
     {#if thumbUrl && !thumbBroken}
@@ -87,7 +91,6 @@
     <div class="flex flex-col gap-1.5 min-w-0">
       <div class="flex items-center gap-2 min-w-0">
         <span class="text-sm text-slate-200 font-medium truncate" title={source.path}>{basename}</span>
-        <span class="text-[10px] uppercase tracking-wide text-slate-500 flex-shrink-0">{source.extraction_runs.length} run{source.extraction_runs.length === 1 ? "" : "s"}</span>
       </div>
       <div class="text-xs text-slate-500">
         {activeRefs} of {projectRefs.length} ref{projectRefs.length === 1 ? "" : "s"} active

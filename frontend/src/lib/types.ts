@@ -4,7 +4,9 @@ export interface Source {
   path: string;
   added_at: string;
   excluded_refs: string[];
-  extraction_runs: unknown[];
+  /** True when the project has at least one kept frame on disk for this
+   *  video stem — survives server restarts. */
+  extracted: boolean;
 }
 
 export interface RefImage {

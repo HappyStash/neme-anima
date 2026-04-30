@@ -33,16 +33,47 @@ class DeleteProjectBody(BaseModel):
 
 
 def _project_view(project: Project) -> dict:
+    extracted_stems = _stems_with_kept_frames(project)
+    sources = []
+    for s in project.sources:
+        d = asdict(s)
+        # Drop the legacy "extraction_runs" field — it was never populated and
+        # the UI doesn't use it. Replace with a persistent "extracted" flag
+        # derived from on-disk kept frames so it survives restarts.
+        d.pop("extraction_runs", None)
+        d["extracted"] = Path(s.path).stem in extracted_stems
+        sources.append(d)
     return {
         "slug": project.slug,
         "name": project.name,
         "folder": str(project.root.resolve()),
         "created_at": project.created_at.isoformat(),
-        "sources": [asdict(s) for s in project.sources],
+        "sources": sources,
         "refs": [asdict(r) for r in project.refs],
         "thresholds_overrides": project.thresholds_overrides,
         "source_root": project.source_root,
     }
+
+
+def _stems_with_kept_frames(project: Project) -> set[str]:
+    """Return the set of video stems that have at least one file written to
+    the project's kept/ folder. Files are named ``<video_stem>__...png`` so we
+    can recover the stem by splitting on the double underscore.
+    """
+    kept = project.kept_dir
+    if not kept.exists():
+        return set()
+    stems: set[str] = set()
+    try:
+        for entry in kept.iterdir():
+            if not entry.is_file():
+                continue
+            stem, sep, _ = entry.name.partition("__")
+            if sep:
+                stems.add(stem)
+    except OSError:
+        return set()
+    return stems
 
 
 @router.get("")

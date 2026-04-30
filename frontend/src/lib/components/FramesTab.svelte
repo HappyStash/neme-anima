@@ -12,7 +12,12 @@
   });
 
   function handleClick(index: number, ev: MouseEvent) {
-    framesStore.click(index, { shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey });
+    // Plain click toggles selection (add if missing, remove if present).
+    // Shift-click still extends a range from the last anchor for bulk select.
+    framesStore.click(index, {
+      shift: ev.shiftKey,
+      ctrl: !ev.shiftKey || ev.ctrlKey || ev.metaKey,
+    });
   }
 
   let cols = $derived(viewStore.density);
@@ -32,10 +37,9 @@
       style="grid-template-columns: repeat({cols}, minmax(0, 1fr));"
     >
       {#each framesStore.items as f, i (f.filename)}
-        {@const _v = framesStore.selectionVersion /* force re-render on selection change */}
         <FrameThumb
           frame={f}
-          selected={framesStore.selection.has(f.filename)}
+          selected={(framesStore.selectionVersion, framesStore.selection.has(f.filename))}
           onclick={(ev) => handleClick(i, ev)}
         />
       {/each}

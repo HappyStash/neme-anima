@@ -53,19 +53,21 @@
 <button
   type="button"
   class="relative aspect-[3/4] rounded-lg overflow-hidden cursor-pointer transition-transform duration-150 hover:scale-[1.02] hover:z-10
-    {selected ? 'ring-2 ring-accent-500 shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'shadow-md'}"
+    {selected ? 'shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'shadow-md'}"
   onclick={onclick}
   onmouseenter={() => { hovered = true; void loadTags(); }}
   onmouseleave={() => (hovered = false)}
 >
   <img src={imageUrl} alt="" class="w-full h-full object-cover" loading="lazy" />
 
-  <span class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-black/60 backdrop-blur-sm rounded text-white opacity-0 transition-opacity {hovered ? 'opacity-100' : ''}">
+  <span class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-black/60 backdrop-blur-sm rounded text-white opacity-0 transition-opacity {hovered ? 'opacity-100' : ''}">
     {frame.video_stem}
   </span>
 
   {#if selected}
-    <span class="absolute top-1.5 right-1.5 w-5 h-5 rounded-full bg-accent-500 text-white text-xs flex items-center justify-center font-bold">✓</span>
+    <!-- Inset border overlay drawn on top of the image, with a faint tint
+         so the selection state is unmissable on any image. -->
+    <span class="absolute inset-0 rounded-lg border-[3px] border-accent-500 bg-accent-500/20 pointer-events-none"></span>
   {/if}
 
   {#if hovered}

@@ -63,10 +63,32 @@ class JobQueue:
 
     async def stop(self) -> None:
         self._stop_requested = True
+        # Tell any running job to wind down — the runner is supposed to poll
+        # this token, but even if it doesn't we still want to unblock stop().
+        if self._current_cancel is not None:
+            self._current_cancel.set()
         self._wake.set()
-        if self._worker_task:
-            await self._worker_task
-            self._worker_task = None
+        if self._worker_task is None:
+            return
+        task = self._worker_task
+        self._worker_task = None
+        # Worker should observe _stop_requested on its next loop iteration.
+        # If it doesn't (e.g. the runner is wedged in a thread we can't
+        # cancel, or any future scheduling oddity), force-cancel after a
+        # short grace period so server shutdown can never hang here.
+        try:
+            await asyncio.wait_for(asyncio.shield(task), timeout=2.0)
+        except asyncio.TimeoutError:
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
+        except asyncio.CancelledError:
+            # If our caller is being cancelled, propagate after still trying
+            # to bring the worker down.
+            task.cancel()
+            raise
 
     async def submit(self, payload: dict) -> str:
         job_id = secrets.token_hex(6)
