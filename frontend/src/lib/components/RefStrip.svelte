@@ -26,7 +26,7 @@
   let slug = $derived(projectsStore.active?.slug ?? "");
 </script>
 
-<div class="flex items-center gap-1 mt-1.5">
+<div class="flex flex-wrap items-center gap-1">
   <span class="text-[9px] uppercase tracking-wide text-slate-600 mr-1">refs</span>
   {#each refPaths as path (path)}
     {@const active = isActive(path)}

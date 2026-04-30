@@ -17,6 +17,7 @@ from neme_extractor.detect import Detector, FrameDetections
 from neme_extractor.frame_select import select_frames
 from neme_extractor.identify import Identifier, Verdict
 from neme_extractor.output import OutputWriter
+from neme_extractor.pipeline_progress import NULL_PROGRESS, PipelineProgress
 from neme_extractor.storage.metadata import FrameRecord
 from neme_extractor.storage.project import Project
 from neme_extractor.tag import Tagger
@@ -49,7 +50,22 @@ def _resolve_thresholds(project: Project) -> Thresholds:
     return base
 
 
-def run_extract(*, project: Project, source_idx: int) -> None:
+def run_extract(
+    *, project: Project, source_idx: int,
+    progress: PipelineProgress | None = None,
+) -> None:
+    progress = progress or NULL_PROGRESS
+    try:
+        _run_extract_inner(project=project, source_idx=source_idx, progress=progress)
+    except Exception as exc:
+        progress.stage_fail("setup", f"{type(exc).__name__}: {exc}")
+        raise
+
+
+def _run_extract_inner(
+    *, project: Project, source_idx: int, progress: PipelineProgress
+) -> None:
+    progress.stage_start("setup", "Setup", message="Loading video and references")
     thresholds = _resolve_thresholds(project)
     source = project.sources[source_idx]
     video_path = Path(source.path)
@@ -65,7 +81,9 @@ def run_extract(*, project: Project, source_idx: int) -> None:
     vid = Video(video_path)
     console.print(f"video: {vid.num_frames} frames @ {vid.fps:.2f} fps "
                   f"({vid.duration_seconds:.1f} s)")
+    progress.stage_done("setup", message=f"{vid.num_frames:,} frames @ {vid.fps:.1f} fps · {len(eff_refs)} ref{'s' if len(eff_refs)!=1 else ''}")
 
+    progress.stage_start("scenes", "Scene detection", message="Analysing shots")
     scenes = detect_scenes(
         video_path,
         content_threshold=thresholds.scene.threshold,
@@ -73,6 +91,7 @@ def run_extract(*, project: Project, source_idx: int) -> None:
     )
     console.print(f"scenes: {len(scenes)}")
     writer.write_scenes(scenes)
+    progress.stage_done("scenes", message=f"{len(scenes)} scene{'s' if len(scenes)!=1 else ''}")
 
     identifier = Identifier(ref_paths=[Path(p) for p in eff_refs], cfg=thresholds.identify)
     detector = Detector(
@@ -84,8 +103,14 @@ def run_extract(*, project: Project, source_idx: int) -> None:
     stride = max(1, thresholds.detect.frame_stride)
     total_frames = sum(len(range(s.start_frame, s.end_frame, stride)) for s in scenes)
 
+    progress.stage_start(
+        "detect", "Person detection",
+        total=total_frames,
+        message=f"0 / {total_frames:,} frames",
+    )
     with _make_progress() as p:
         task = p.add_task("detect", total=total_frames)
+        seen = 0
         for scene in scenes:
             for fi, frame in vid.iter_frames(
                 start=scene.start_frame, end=scene.end_frame, stride=stride
@@ -93,7 +118,11 @@ def run_extract(*, project: Project, source_idx: int) -> None:
                 fd = detector.detect_frame(fi, frame, with_faces=thresholds.detect.detect_faces)
                 per_scene[scene.index].append(fd)
                 p.advance(task)
+                seen += 1
+                progress.stage_advance("detect")
+    progress.stage_done("detect", message=f"{total_frames:,} frames scanned")
 
+    progress.stage_start("track", "Tracking", message="Building tracklets")
     tracklets: list[Tracklet] = []
     track_cfg = thresholds.track
     track_cfg = type(track_cfg)(
@@ -107,10 +136,16 @@ def run_extract(*, project: Project, source_idx: int) -> None:
             tracklets.extend(track_scene(scene.index, scene_dets, track_cfg))
     console.print(f"tracklets: {len(tracklets)}")
     writer.write_tracklets(tracklets)
+    progress.stage_done("track", message=f"{len(tracklets)} tracklet{'s' if len(tracklets)!=1 else ''}")
 
     tagger = Tagger(thresholds.tag)
     ref_features = identifier.reference_features()
 
+    progress.stage_start(
+        "identify", "Identify · select · save",
+        total=len(tracklets),
+        message=f"0 / {len(tracklets)} tracklets",
+    )
     with _make_progress() as p:
         task = p.add_task("identify+save", total=len(tracklets))
         kept, rejected = 0, 0
@@ -121,6 +156,11 @@ def run_extract(*, project: Project, source_idx: int) -> None:
                                           thresholds, video_stem)
                 rejected += 1
                 p.advance(task)
+                progress.stage_advance("identify")
+                progress.stage_message(
+                    "identify",
+                    f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
+                )
                 continue
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
@@ -144,6 +184,17 @@ def run_extract(*, project: Project, source_idx: int) -> None:
                 writer.write_kept(rec, cropped.image_rgb, tag_res.text)
                 kept += 1
             p.advance(task)
+            progress.stage_advance("identify")
+            progress.stage_message(
+                "identify",
+                f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
+            )
+
+    progress.stage_done(
+        "identify",
+        message=f"kept {kept} · rejected {rejected}",
+    )
+    progress.finish({"kept": kept, "rejected": rejected})
 
     console.rule("[bold green]done[/bold green]")
     console.print(f"kept: {kept}  rejected: {rejected}  output: {project.kept_dir}")
@@ -188,7 +239,22 @@ def _wipe_outputs_for_stem(project: Project, video_stem: str) -> None:
                 f.unlink()
 
 
-def run_rerun(*, project: Project, video_stem: str) -> None:
+def run_rerun(
+    *, project: Project, video_stem: str,
+    progress: PipelineProgress | None = None,
+) -> None:
+    progress = progress or NULL_PROGRESS
+    try:
+        _run_rerun_inner(project=project, video_stem=video_stem, progress=progress)
+    except Exception as exc:
+        progress.stage_fail("setup", f"{type(exc).__name__}: {exc}")
+        raise
+
+
+def _run_rerun_inner(
+    *, project: Project, video_stem: str, progress: PipelineProgress
+) -> None:
+    progress.stage_start("setup", "Setup", message="Loading cached tracklets")
     thresholds = _resolve_thresholds(project)
     # Find the source matching this video_stem.
     source_idx = next(
@@ -211,15 +277,31 @@ def run_rerun(*, project: Project, video_stem: str) -> None:
     ref_features = identifier.reference_features()
 
     _wipe_outputs_for_stem(project, video_stem)
+    progress.stage_done(
+        "setup",
+        message=f"{len(tracklets)} cached tracklet{'s' if len(tracklets)!=1 else ''}",
+    )
 
+    progress.stage_start(
+        "identify", "Identify · select · save",
+        total=len(tracklets),
+        message=f"0 / {len(tracklets)} tracklets",
+    )
     with _make_progress() as p:
         task = p.add_task("rerun", total=len(tracklets))
+        kept, rejected = 0, 0
         for tracklet in tracklets:
             score = identifier.score_tracklet(tracklet, vid)
             if score.verdict == Verdict.REJECT:
                 _save_one_rejected_sample(writer, vid, tracklet, score.median_distance,
                                           thresholds, video_stem)
+                rejected += 1
                 p.advance(task)
+                progress.stage_advance("identify")
+                progress.stage_message(
+                    "identify",
+                    f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
+                )
                 continue
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
@@ -241,5 +323,13 @@ def run_rerun(*, project: Project, video_stem: str) -> None:
                     score=pick.score, video_stem=video_stem,
                 )
                 writer.write_kept(rec, cropped.image_rgb, tag_res.text)
+                kept += 1
             p.advance(task)
+            progress.stage_advance("identify")
+            progress.stage_message(
+                "identify",
+                f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
+            )
+    progress.stage_done("identify", message=f"kept {kept} · rejected {rejected}")
+    progress.finish({"kept": kept, "rejected": rejected})
     console.rule("[bold green]rerun done[/bold green]")

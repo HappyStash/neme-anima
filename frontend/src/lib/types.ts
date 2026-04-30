@@ -60,9 +60,32 @@ export interface QueueItem {
 export type EventType =
   | "queue.update"
   | "job.progress"
+  | "job.stages"
   | "job.frame"
   | "job.log"
   | "job.done";
+
+export type StageStatus = "pending" | "running" | "done" | "failed";
+
+export interface PipelineStage {
+  key: string;
+  label: string;
+  status: StageStatus;
+  current: number;
+  total: number;
+  pct: number;
+  message: string;
+}
+
+export interface JobStages {
+  job_id: string;
+  project: string;
+  source_idx: number | null;
+  kind: "extract" | "rerun" | string;
+  stages: PipelineStage[];
+  summary: { kept?: number; rejected?: number } | null;
+  updated_at: number;
+}
 
 export interface ServerEvent {
   type: EventType;

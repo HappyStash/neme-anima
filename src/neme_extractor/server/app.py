@@ -8,6 +8,8 @@ delegates to the project-centric `pipeline.run_extract` / `run_rerun`.
 from __future__ import annotations
 
 import asyncio
+import logging
+import traceback
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +19,8 @@ from neme_extractor.server.events import Broadcaster, Event
 from neme_extractor.server.queue import JobQueue
 from neme_extractor.server.registry import ProjectRegistry
 from neme_extractor.storage.project import Project
+
+logger = logging.getLogger(__name__)
 
 
 def default_state_dir() -> Path:
@@ -34,31 +38,74 @@ async def _pipeline_runner(
     The pipeline is synchronous + GPU-bound. Run it via asyncio.to_thread so
     the event loop stays responsive for WebSocket fan-out.
     """
-    from neme_extractor.pipeline import run_extract, run_rerun
+    # Light imports first so we can publish the initial UI snapshot before
+    # paying the (potentially seconds-long) cost of loading the pipeline's
+    # heavy GPU/video deps on the first run.
+    from neme_extractor.pipeline_progress import EXTRACT_STAGES, RERUN_STAGES
+    from neme_extractor.server.job_progress import BroadcasterProgress
 
     kind = payload["kind"]  # "extract" | "rerun"
     project_folder = Path(payload["project_folder"])
     project = Project.load(project_folder)
+    source_idx: int | None = None
+    if kind == "extract":
+        source_idx = int(payload["source_idx"])
+    elif kind == "rerun":
+        # Resolve the source_idx by stem so the UI can correlate to the row.
+        stem = str(payload["video_stem"])
+        source_idx = next(
+            (i for i, s in enumerate(project.sources) if Path(s.path).stem == stem),
+            None,
+        )
 
-    await broadcaster.publish(Event(
-        type="job.progress",
-        payload={"job_id": job_id, "project": project.slug,
-                 "stage": "starting", "pct": 0},
-    ))
+    progress = BroadcasterProgress(
+        loop=asyncio.get_running_loop(),
+        broadcaster=broadcaster,
+        job_id=job_id,
+        project_slug=project.slug,
+        source_idx=source_idx,
+        kind=kind,
+        stages=EXTRACT_STAGES if kind == "extract" else RERUN_STAGES,
+    )
+    progress.publish_initial()
+    logger.info(
+        "pipeline.start job=%s kind=%s project=%s source_idx=%s",
+        job_id, kind, project.slug, source_idx,
+    )
+
+    # Heavy imports happen here; the UI already has its skeleton.
+    from neme_extractor.pipeline import run_extract, run_rerun
 
     def _do_work() -> None:
-        if kind == "extract":
-            run_extract(project=project, source_idx=int(payload["source_idx"]))
-        elif kind == "rerun":
-            run_rerun(project=project, video_stem=str(payload["video_stem"]))
-        else:
-            raise ValueError(f"unknown job kind: {kind!r}")
+        try:
+            if kind == "extract":
+                run_extract(
+                    project=project, source_idx=int(payload["source_idx"]),
+                    progress=progress,
+                )
+            elif kind == "rerun":
+                run_rerun(
+                    project=project, video_stem=str(payload["video_stem"]),
+                    progress=progress,
+                )
+            else:
+                raise ValueError(f"unknown job kind: {kind!r}")
+        except Exception:
+            # Surface the full traceback to the server log; the progress
+            # reporter has already been told about the failure by run_extract /
+            # run_rerun and will mark the right stage red on the UI.
+            logger.error(
+                "pipeline.crashed job=%s kind=%s\n%s",
+                job_id, kind, traceback.format_exc(),
+            )
+            raise
 
     await asyncio.to_thread(_do_work)
 
+    logger.info("pipeline.done job=%s kind=%s", job_id, kind)
     await broadcaster.publish(Event(
         type="job.done",
-        payload={"job_id": job_id, "project": project.slug},
+        payload={"job_id": job_id, "project": project.slug, "source_idx": source_idx},
     ))
 
 

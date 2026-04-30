@@ -130,6 +130,7 @@ async def extract(request: Request, slug: str, idx: int) -> dict:
     job_id = await request.app.state.queue.submit({
         "kind": "extract",
         "project_folder": str(project.root.resolve()),
+        "project_slug": project.slug,
         "source_idx": idx,
     })
     return {"job_id": job_id}
@@ -144,6 +145,8 @@ async def rerun(request: Request, slug: str, idx: int) -> dict:
     job_id = await request.app.state.queue.submit({
         "kind": "rerun",
         "project_folder": str(project.root.resolve()),
+        "project_slug": project.slug,
+        "source_idx": idx,
         "video_stem": video_stem,
     })
     return {"job_id": job_id}

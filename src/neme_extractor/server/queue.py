@@ -9,6 +9,7 @@ running jobs receive a cancellation token they should poll periodically.
 from __future__ import annotations
 
 import asyncio
+import logging
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
@@ -16,6 +17,8 @@ from enum import Enum
 from typing import Any
 
 from neme_extractor.server.events import Broadcaster, Event
+
+logger = logging.getLogger(__name__)
 
 
 class JobStatus(str, Enum):
@@ -132,7 +135,8 @@ class JobQueue:
                 job.status = JobStatus.DONE
         except Exception as exc:  # noqa: BLE001
             job.status = JobStatus.FAILED
-            job.error = str(exc)
+            job.error = f"{type(exc).__name__}: {exc}"
+            logger.exception("queue.runner failed job_id=%s", job.job_id)
         finally:
             self._current_cancel = None
             await self._publish_queue_update()
@@ -142,7 +146,12 @@ class JobQueue:
             Event(
                 type="queue.update",
                 payload={"queue": [
-                    {"job_id": j.job_id, "status": j.status, "error": j.error}
+                    {
+                        "job_id": j.job_id,
+                        "status": j.status,
+                        "payload": j.payload,
+                        "error": j.error,
+                    }
                     for j in self._jobs
                 ]},
             )

@@ -3,6 +3,7 @@
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
   import { queueStore } from "$lib/stores/queue.svelte";
+  import { jobsStore } from "$lib/stores/jobs.svelte";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { connectEvents, type Connection } from "$lib/ws";
   import TopStrip from "$lib/components/TopStrip.svelte";
@@ -24,7 +25,7 @@
     await queueStore.refresh();
     conn = connectEvents({
       url: `${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/ws`,
-      onEvent: (ev) => queueStore.ingest(ev),
+      onEvent: (ev) => { queueStore.ingest(ev); jobsStore.ingest(ev); },
       onStatus: (s) => queueStore.setStatus(s),
     });
     window.addEventListener("keydown", onKey);
