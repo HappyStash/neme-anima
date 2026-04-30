@@ -184,10 +184,26 @@ class TrainingManager:
                 label = "resume" if resume_from_checkpoint else project.training.preset
                 run_dir = training_lib.new_run_dir(project, label=label)
 
+            # Materialize the training dataset as symlinks under the run
+            # directory: each kept frame's image points at its crop derivative
+            # when one exists, while the sidecar always points at the
+            # original `.txt` (so "edit tags on the original; train on the
+            # crop" is the on-disk reality the trainer sees). Rebuilt on
+            # every start so a resume picks up the latest crop set.
+            dataset_dir = run_dir / "dataset"
+            staging = training_lib.build_dataset_staging(project, dataset_dir)
+            logger.info(
+                "training: staged dataset at %s (%d images, %d cropped, %d missing txt)",
+                staging["dest"], staging["images"],
+                staging["with_crop"], staging["missing_txt"],
+            )
+
             # Render TOML files into the run dir.
             dataset_toml = run_dir / "dataset.toml"
             run_toml = run_dir / "run.toml"
-            dataset_toml.write_text(training_lib.render_dataset_toml(project))
+            dataset_toml.write_text(training_lib.render_dataset_toml(
+                project, dataset_root=dataset_dir,
+            ))
             run_toml.write_text(training_lib.render_run_toml(
                 project,
                 run_dir=run_dir,

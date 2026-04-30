@@ -58,6 +58,27 @@ async def test_list_all_frames(client, project_with_frames: Project):
     assert filenames[1].startswith("ep02__")
 
 
+async def test_list_hides_crop_derivatives(
+    client, project_with_frames: Project,
+) -> None:
+    """`_crop` derivatives are an internal training-target replacement
+    for their original; the frames grid only shows the user-facing rows."""
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 10, "y": 20, "width": 80, "height": 60},
+    )
+    assert resp.status_code == 200
+    # Crop appended a `_crop` record + wrote `_crop.png` to disk; the
+    # listing must still only return the originals.
+    resp = await client.get(f"/api/projects/{project_with_frames.slug}/frames")
+    assert resp.status_code == 200
+    filenames = [f["filename"] for f in resp.json()["items"]]
+    assert all(not f.endswith("_crop") for f in filenames), filenames
+
+
 async def test_list_filtered_by_source(client, project_with_frames: Project):
     resp = await client.get(
         f"/api/projects/{project_with_frames.slug}/frames",
@@ -199,9 +220,9 @@ async def test_bulk_retag_danbooru_prefers_crop_derivative(
     client, app, project_with_frames: Project,
 ):
     """When a `_crop` derivative is on disk for an original, the WD14
-    tagger must run on the cropped pixels and write the cropped sidecar.
-    Tagging the wide shot would produce labels that don't match the image
-    the trainer actually sees."""
+    tagger must run on the cropped pixels but write the result to the
+    *original's* sidecar — there is only ever one .txt per kept frame and
+    training pairs the crop's image with that single sidecar at staging."""
     name = "ep01__s000_t001_f000010"
     # Distinct pixel values so the fake tagger can prove which image it saw.
     original = np.full((128, 128, 3), 200, dtype=np.uint8)
@@ -209,10 +230,7 @@ async def test_bulk_retag_danbooru_prefers_crop_derivative(
     Image.fromarray(original).save(project_with_frames.kept_dir / f"{name}.png")
     Image.fromarray(crop).save(project_with_frames.kept_dir / f"{name}_crop.png")
     (project_with_frames.kept_dir / f"{name}.txt").write_text(
-        "untouched, original_tags\nold_orig_caption\n", encoding="utf-8",
-    )
-    (project_with_frames.kept_dir / f"{name}_crop.txt").write_text(
-        "stale_crop_tags\nkeep_this_caption\n", encoding="utf-8",
+        "old_orig_tags\nkeep_this_caption\n", encoding="utf-8",
     )
 
     seen_pixel_means: list[float] = []
@@ -235,23 +253,22 @@ async def test_bulk_retag_danbooru_prefers_crop_derivative(
     assert resp.status_code == 200
     body = resp.json()
     assert body["retagged"] == 1
-    assert body["effective_filenames"] == [f"{name}_crop"]
+    # The original's filename is the row the user sees — UI badge updates
+    # target it directly (the crop row is filtered out of the grid).
+    assert body["effective_filenames"] == [name]
 
     # The tagger saw the crop's pixels (~50), not the original's (~200).
     assert seen_pixel_means and seen_pixel_means[0] < 100
 
-    # Crop sidecar updated; keeps the existing description on row 2.
-    crop_txt = (project_with_frames.kept_dir / f"{name}_crop.txt").read_text(
-        encoding="utf-8",
-    )
-    assert crop_txt.startswith("from_crop_image\n")
-    assert "keep_this_caption" in crop_txt
-
-    # Original sidecar untouched — each sidecar describes its own image.
+    # Original sidecar updated; description on row 2 preserved.
     orig_txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(
         encoding="utf-8",
     )
-    assert orig_txt.startswith("untouched, original_tags\n")
+    assert orig_txt.startswith("from_crop_image\n")
+    assert "keep_this_caption" in orig_txt
+
+    # No `_crop.txt` is created — the derivative is image-only.
+    assert not (project_with_frames.kept_dir / f"{name}_crop.txt").exists()
 
 
 async def test_bulk_retag_danbooru_uses_original_when_no_crop(
@@ -283,9 +300,10 @@ async def test_bulk_retag_danbooru_uses_original_when_no_crop(
 async def test_bulk_retag_llm_prefers_crop_derivative(
     client, project_with_frames: Project, monkeypatch,
 ):
-    """Same retarget rule for the LLM path: the description must come from
-    the crop's pixels and land in the crop's sidecar so the trained-against
-    image and its caption stay coherent."""
+    """Same retarget rule for the LLM path: the description is generated
+    from the crop's pixels but written to the original's sidecar — the
+    crop is image-only and the original `.txt` is the single source of
+    truth for tags + caption."""
     name = "ep01__s000_t001_f000010"
 
     # Configure a model so the route gets past its 422 guard.
@@ -300,9 +318,6 @@ async def test_bulk_retag_llm_prefers_crop_derivative(
     Image.fromarray(crop).save(project_with_frames.kept_dir / f"{name}_crop.png")
     (project_with_frames.kept_dir / f"{name}.txt").write_text(
         "orig_tags\nold_orig_caption\n", encoding="utf-8",
-    )
-    (project_with_frames.kept_dir / f"{name}_crop.txt").write_text(
-        "crop_tags\n", encoding="utf-8",
     )
 
     seen_image_paths: list[Path] = []
@@ -324,34 +339,33 @@ async def test_bulk_retag_llm_prefers_crop_derivative(
     assert resp.status_code == 200
     body = resp.json()
     assert body["described"] == 1
-    assert body["effective_filenames"] == [f"{name}_crop"]
+    assert body["effective_filenames"] == [name]
 
     # describe_image was passed the crop's PNG path, not the original.
     assert seen_image_paths == [
         project_with_frames.kept_dir / f"{name}_crop.png",
     ]
-    # Danbooru hint comes from the crop's sidecar, not the original's.
-    assert seen_danbooru == ["crop_tags"]
+    # Danbooru hint comes from the original's sidecar (the only one).
+    assert seen_danbooru == ["orig_tags"]
 
-    # Crop sidecar got the description; tag line preserved.
-    crop_txt = (project_with_frames.kept_dir / f"{name}_crop.txt").read_text(
-        encoding="utf-8",
-    )
-    assert crop_txt.startswith("crop_tags\n")
-    assert "Description of the cropped subject." in crop_txt
-
-    # Original sidecar untouched.
+    # Original sidecar got the new description; tag line preserved.
     orig_txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(
         encoding="utf-8",
     )
-    assert orig_txt == "orig_tags\nold_orig_caption\n"
+    assert orig_txt.startswith("orig_tags\n")
+    assert "Description of the cropped subject." in orig_txt
+
+    # No `_crop.txt` is created — the derivative is image-only.
+    assert not (project_with_frames.kept_dir / f"{name}_crop.txt").exists()
 
 
-async def test_bulk_retag_llm_skips_resolve_for_crop_filename(
+async def test_bulk_retag_llm_resolves_crop_filename_to_original(
     client, project_with_frames: Project, monkeypatch,
 ):
-    """When the user selects a `_crop` filename directly, we must NOT
-    chase a `_crop_crop` ghost — the literal frame is the right target."""
+    """If a `_crop` filename is passed directly (legacy callers, manual
+    API hits), we treat it as the original it derives from: tag the crop
+    image, write to the original's sidecar, and report the original as
+    the effective filename. There is no `_crop_crop` ghost."""
     name = "ep01__s000_t001_f000010"
     crop_name = f"{name}_crop"
 
@@ -359,10 +373,12 @@ async def test_bulk_retag_llm_skips_resolve_for_crop_filename(
     project_with_frames.llm.model = "fake-model"
     project_with_frames.save()
 
+    original = np.full((64, 64, 3), 200, dtype=np.uint8)
     crop = np.full((64, 64, 3), 80, dtype=np.uint8)
+    Image.fromarray(original).save(project_with_frames.kept_dir / f"{name}.png")
     Image.fromarray(crop).save(project_with_frames.kept_dir / f"{crop_name}.png")
-    (project_with_frames.kept_dir / f"{crop_name}.txt").write_text(
-        "crop_tags\n", encoding="utf-8",
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "orig_tags\n", encoding="utf-8",
     )
 
     captured: list[Path] = []
@@ -380,8 +396,15 @@ async def test_bulk_retag_llm_skips_resolve_for_crop_filename(
         json={"filenames": [crop_name]},
     )
     assert resp.status_code == 200
-    assert resp.json()["effective_filenames"] == [crop_name]
+    assert resp.json()["effective_filenames"] == [name]
+    # Crop pixels are what we asked the LLM to describe.
     assert captured == [project_with_frames.kept_dir / f"{crop_name}.png"]
+    # Description landed on the original's sidecar, not a `_crop.txt`.
+    orig_txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(
+        encoding="utf-8",
+    )
+    assert "ok" in orig_txt
+    assert not (project_with_frames.kept_dir / f"{crop_name}.txt").exists()
 
 
 async def test_list_frames_has_description_flag(
@@ -462,16 +485,20 @@ async def test_get_frame_image(client, project_with_frames: Project):
     assert len(resp.content) > 0
 
 
-async def test_crop_creates_derivative_keeps_original(
+async def test_crop_creates_image_only_derivative(
     client, project_with_frames: Project, tmp_path: Path,
 ) -> None:
-    """Cropping must produce a NEW frame and leave the source untouched —
-    the original is the user's safety net per the LoRA-training brief."""
+    """Cropping produces a NEW image-only derivative and leaves the source
+    untouched. Tags stay on the original's `<name>.txt` — there is only
+    ever one .txt per kept frame, and training pairs the crop with that
+    sidecar at staging time."""
     # Replace the 16×16 fixture image with a larger one so we can crop a
     # meaningful sub-rectangle and verify dimensions.
     name = "ep01__s000_t001_f000010"
     big = np.zeros((100, 200, 3), dtype=np.uint8)
     Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    orig_txt = project_with_frames.kept_dir / f"{name}.txt"
+    orig_text_before = orig_txt.read_text(encoding="utf-8")
 
     resp = await client.post(
         f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
@@ -489,9 +516,30 @@ async def test_crop_creates_derivative_keeps_original(
     assert new_png.exists()
     with Image.open(new_png) as im:
         assert im.size == (80, 60)
-    # Tags carried over from the original.
-    new_txt = project_with_frames.kept_dir / f"{name}_crop.txt"
-    assert "1girl" in new_txt.read_text(encoding="utf-8")
+    # No `_crop.txt` is created — crop is image-only.
+    assert not (project_with_frames.kept_dir / f"{name}_crop.txt").exists()
+    # Original sidecar untouched.
+    assert orig_txt.read_text(encoding="utf-8") == orig_text_before
+
+
+async def test_crop_removes_legacy_crop_txt(
+    client, project_with_frames: Project,
+) -> None:
+    """Projects from before the image-only-derivative change may still
+    have a `<name>_crop.txt` on disk. Re-cropping must wipe it so the
+    trainer-staging step doesn't see a phantom paired sidecar."""
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    legacy = project_with_frames.kept_dir / f"{name}_crop.txt"
+    legacy.write_text("stale tags\n", encoding="utf-8")
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 0, "y": 0, "width": 50, "height": 50},
+    )
+    assert resp.status_code == 200
+    assert not legacy.exists()
 
 
 async def test_crop_clamps_oob_rectangle(

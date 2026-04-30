@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from neme_extractor.storage.metadata import FrameRecord, MetadataLog
-from neme_extractor.storage.project import Project
+from neme_extractor.storage.project import CROP_SUFFIX, Project
 from neme_extractor.tag import join_sidecar, split_sidecar
 
 router = APIRouter(prefix="/api/projects", tags=["frames"])
@@ -88,18 +88,21 @@ def _resolve_tag_target(
     is what the dataset actually carries forward. Tagging the original wide
     shot would mis-describe pixels that the model never sees, so when a
     derivative is on disk for an original filename we transparently retarget
-    to it. Sidecars stay paired with their own image — the original's
-    sidecar is left untouched.
+    the *image* to it. The sidecar always stays at the original filename —
+    there is only ever one ``.txt`` per kept frame, and training pairs the
+    crop's pixels with that original sidecar at staging time. The effective
+    filename returned is also the original's so the UI updates the row the
+    user actually sees (crop derivatives are hidden from the grid).
 
-    If ``filename`` is itself a ``_crop`` derivative, we always use it as-is
-    (no double-resolve to a ``_crop_crop`` ghost).
+    If ``filename`` is itself a ``_crop`` derivative we strip the suffix and
+    treat it as the original — there's no ``_crop_crop`` ghost and the .txt
+    still belongs to the original.
     """
-    if not filename.endswith(CROP_SUFFIX):
-        deriv_png, deriv_txt, _spec = _crop_paths(project, filename)
-        if deriv_png.is_file():
-            return deriv_png, deriv_txt, deriv_png.stem
-    png, txt = _frame_paths(project, filename)
-    return png, txt, filename
+    base = filename[: -len(CROP_SUFFIX)] if filename.endswith(CROP_SUFFIX) else filename
+    orig_png, txt = _frame_paths(project, base)
+    deriv_png, _deriv_txt, _spec = _crop_paths(project, base)
+    img = deriv_png if deriv_png.is_file() else orig_png
+    return img, txt, base
 
 
 @router.get("/{slug}/frames")
@@ -116,10 +119,14 @@ async def list_frames(
     # The metadata log is append-only — a delete or rerun leaves orphan rows
     # behind. We dedupe by filename (keep the most recent record) and filter
     # to entries whose image still exists on disk so the UI never shows a
-    # row with a broken thumbnail.
+    # row with a broken thumbnail. Crop derivatives (`*_crop`) are hidden
+    # from the grid: they're an internal training-target replacement for
+    # their original, not a separate frame the user picked.
     by_filename: dict[str, FrameRecord] = {}
     for rec in log.iter_records(video_stem=source):
         if kept_only and not rec.kept:
+            continue
+        if rec.filename.endswith(CROP_SUFFIX):
             continue
         by_filename[rec.filename] = rec
 
@@ -220,8 +227,10 @@ def _cleanup_crop_artifacts(project: Project, filename: str) -> None:
     """Remove crop-related siblings for a frame being deleted.
 
     Two cases:
-      * Original deleted → drop its derivative png/txt and the .crop.json
+      * Original deleted → drop its derivative png and the .crop.json
         sidecar so the next time a same-named frame is added it starts fresh.
+        Also removes a legacy ``<name>_crop.txt`` if one is on disk from
+        before the image-only derivative layout.
       * Derivative deleted → drop the parent's .crop.json sidecar so the
         next "open original" doesn't show a phantom rectangle for a crop
         whose result has been thrown away.
@@ -432,8 +441,8 @@ def _find_record(project: Project, filename: str) -> FrameRecord | None:
 # Each original gets at most one crop derivative; re-cropping overwrites it.
 # The fixed suffix (no numeric counter) is what makes the round-trip work —
 # without it we'd accumulate _crop1/_crop2/... and have no way to find
-# "the" derivative when re-opening the original.
-CROP_SUFFIX = "_crop"
+# "the" derivative when re-opening the original. The suffix itself lives in
+# storage/project.py because both the API and the trainer key off it.
 
 
 def _crop_paths(project: Project, original_filename: str) -> tuple[Path, Path, Path]:
@@ -491,7 +500,7 @@ async def crop_frame_endpoint(
     from PIL import Image
 
     project = _load(request, slug)
-    src_png, src_txt = _frame_paths(project, filename)
+    src_png, _ = _frame_paths(project, filename)
     if not src_png.exists():
         raise HTTPException(status_code=404, detail="frame not found")
 
@@ -511,13 +520,11 @@ async def crop_frame_endpoint(
         cropped = im.crop((x, y, x + w, y + h))
         cropped.save(out_png)  # overwrites prior derivative if present
 
-    # Carry the original's tags forward; the crop usually keeps roughly the
-    # same subject and the user can re-edit / re-tag on demand. Always
-    # rewrite so a re-crop refreshes the sidecar to match the latest tags.
-    if src_txt.exists():
-        out_txt.write_bytes(src_txt.read_bytes())
-    else:
-        out_txt.write_text("\n", encoding="utf-8")
+    # The crop derivative is image-only; tags stay on the original sidecar.
+    # Remove any legacy `<name>_crop.txt` left over from earlier versions
+    # so the trainer-staging step doesn't see a phantom paired sidecar.
+    if out_txt.exists():
+        out_txt.unlink()
 
     spec_path.write_text(
         json.dumps({"x": x, "y": y, "width": w, "height": h}),

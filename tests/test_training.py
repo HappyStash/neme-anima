@@ -87,7 +87,7 @@ def test_validate_for_run_requires_train_py(project: Project, tmp_path: Path):
 # ----- TOML rendering -------------------------------------------------------
 
 
-def test_render_dataset_toml_includes_kept_dir(project: Project):
+def test_render_dataset_toml_defaults_to_kept_dir(project: Project):
     text = training.render_dataset_toml(project)
     assert "[[directory]]" in text
     assert str(project.kept_dir.resolve()) in text
@@ -97,6 +97,19 @@ def test_render_dataset_toml_includes_kept_dir(project: Project):
     assert "num_ar_buckets = 9" in text
     # Default mixed resolutions.
     assert "[512, 1024]" in text
+
+
+def test_render_dataset_toml_uses_passed_dataset_root(
+    project: Project, tmp_path: Path,
+):
+    """The runner passes a per-run staging dir so the TOML must point at
+    that path, not at kept_dir — otherwise diffusion-pipe would see the
+    raw `_crop` derivatives as separate samples."""
+    staged = tmp_path / "staged"
+    staged.mkdir()
+    text = training.render_dataset_toml(project, dataset_root=staged)
+    assert str(staged.resolve()) in text
+    assert str(project.kept_dir.resolve()) not in text
 
 
 def test_render_run_toml_matches_reference_recipe(
@@ -144,6 +157,116 @@ def test_run_toml_quotes_paths_with_special_chars(
     )
     # Embedded double-quotes must be escaped, not bare.
     assert r'\"quotes\"' in text
+
+
+# ----- dataset staging ------------------------------------------------------
+
+
+def _png(path: Path, value: int = 0) -> None:
+    """Write a 4×4 solid-color PNG at ``path``."""
+    from PIL import Image
+    import numpy as np
+    Image.fromarray(np.full((4, 4, 3), value, dtype=np.uint8)).save(path)
+
+
+def test_build_dataset_staging_pairs_originals(project: Project, tmp_path: Path):
+    """Frames without a crop are staged as plain symlinks to the original
+    image and its sidecar."""
+    _png(project.kept_dir / "f1.png")
+    (project.kept_dir / "f1.txt").write_text("tag_a, tag_b\n", encoding="utf-8")
+
+    dest = tmp_path / "ds"
+    info = training.build_dataset_staging(project, dest)
+    assert info["images"] == 1
+    assert info["with_crop"] == 0
+    assert info["missing_txt"] == 0
+
+    # Both pair members exist at the staging path.
+    assert (dest / "f1.png").exists()
+    assert (dest / "f1.txt").exists()
+    # Sidecar content reads back through the link.
+    assert (dest / "f1.txt").read_text(encoding="utf-8") == "tag_a, tag_b\n"
+
+
+def test_build_dataset_staging_substitutes_crop_image(
+    project: Project, tmp_path: Path,
+):
+    """When a `_crop` derivative exists, the staged image points at the
+    crop's pixels but the sidecar still points at the original `.txt`.
+    This is the on-disk realization of "edit tags on the original; train
+    on the crop"."""
+    _png(project.kept_dir / "f1.png", value=200)        # original (light)
+    _png(project.kept_dir / "f1_crop.png", value=50)    # crop (dark)
+    (project.kept_dir / "f1.txt").write_text("orig_tags\n", encoding="utf-8")
+
+    dest = tmp_path / "ds"
+    info = training.build_dataset_staging(project, dest)
+    assert info["images"] == 1
+    assert info["with_crop"] == 1
+    # The trainer sees `f1.png`, not `f1_crop.png` — pairing is by stem.
+    assert sorted(p.name for p in dest.iterdir()) == ["f1.png", "f1.txt"]
+    # The staged image's bytes are the crop's (dark pixels).
+    from PIL import Image
+    import numpy as np
+    with Image.open(dest / "f1.png") as im:
+        assert int(np.array(im).mean()) < 100
+    # The staged sidecar's content is the original's tags.
+    assert (dest / "f1.txt").read_text(encoding="utf-8") == "orig_tags\n"
+
+
+def test_build_dataset_staging_ignores_legacy_crop_txt(
+    project: Project, tmp_path: Path,
+):
+    """A leftover `<name>_crop.txt` from older project layouts must not
+    leak into the trainer's view — only the original sidecar is staged."""
+    _png(project.kept_dir / "f1.png")
+    _png(project.kept_dir / "f1_crop.png")
+    (project.kept_dir / "f1.txt").write_text("orig\n", encoding="utf-8")
+    (project.kept_dir / "f1_crop.txt").write_text("legacy\n", encoding="utf-8")
+
+    dest = tmp_path / "ds"
+    training.build_dataset_staging(project, dest)
+    assert (dest / "f1.txt").read_text(encoding="utf-8") == "orig\n"
+    # No `f1_crop.*` shadow files in the staging dir.
+    assert not any(p.name.endswith("_crop.png") for p in dest.iterdir())
+    assert not any(p.name.endswith("_crop.txt") for p in dest.iterdir())
+
+
+def test_build_dataset_staging_rebuilds_dest(
+    project: Project, tmp_path: Path,
+):
+    """Re-running staging must wipe stale links so a removed/renamed
+    frame doesn't linger in the trainer's view."""
+    _png(project.kept_dir / "f1.png")
+    (project.kept_dir / "f1.txt").write_text("a\n", encoding="utf-8")
+
+    dest = tmp_path / "ds"
+    training.build_dataset_staging(project, dest)
+    assert (dest / "f1.png").exists()
+
+    # Drop f1; add f2. The next staging pass should reflect that.
+    (project.kept_dir / "f1.png").unlink()
+    (project.kept_dir / "f1.txt").unlink()
+    _png(project.kept_dir / "f2.png")
+    (project.kept_dir / "f2.txt").write_text("b\n", encoding="utf-8")
+
+    info = training.build_dataset_staging(project, dest)
+    assert info["images"] == 1
+    assert not (dest / "f1.png").exists()
+    assert (dest / "f2.png").exists()
+
+
+def test_build_dataset_staging_counts_missing_txt(
+    project: Project, tmp_path: Path,
+):
+    """A sidecar-less image is still staged (the trainer can train on it
+    if the user is OK with empty captions) but the count surfaces so the
+    caller can warn."""
+    _png(project.kept_dir / "f1.png")
+    # No f1.txt on disk.
+    info = training.build_dataset_staging(project, tmp_path / "ds")
+    assert info["images"] == 1
+    assert info["missing_txt"] == 1
 
 
 # ----- launcher argv --------------------------------------------------------

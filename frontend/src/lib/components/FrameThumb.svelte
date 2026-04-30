@@ -321,6 +321,16 @@
   <DescriptionModal
     filename={frame.filename}
     onclose={() => (descriptionModalOpen = false)}
-    onsaved={(text) => { hasDescriptionLocal = text.trim().length > 0; }}
+    onsaved={(text) => {
+      hasDescriptionLocal = text.trim().length > 0;
+      // Keep tagText (the cached full sidecar) in sync so the badge tooltip
+      // reflects the new description on the next hover. If tags haven't been
+      // loaded yet, leave tagText null — loadTags will fetch fresh.
+      if (tagText !== null) {
+        const { danbooru } = splitSidecar(tagText);
+        const trimmed = text.trim();
+        tagText = trimmed ? `${danbooru}\n${trimmed}` : danbooru;
+      }
+    }}
   />
 {/if}

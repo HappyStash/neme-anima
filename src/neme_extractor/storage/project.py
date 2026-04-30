@@ -22,6 +22,13 @@ VIDEO_EXTENSIONS = frozenset({
     ".mkv", ".mp4", ".webm", ".mov", ".avi", ".m4v", ".ts", ".wmv",
 })
 
+# Suffix appended to a kept frame's filename to mark its crop derivative
+# (`<filename>_crop.png`). Defined here because the layout is shared by the
+# API (which writes/deletes derivatives) and the trainer (which pairs each
+# derivative with the original's `.txt` at staging time). There's only ever
+# one derivative per original; re-cropping overwrites it.
+CROP_SUFFIX = "_crop"
+
 
 def refs_dir_contains(project_root: Path, candidate: Path) -> bool:
     """True iff ``candidate`` resolves to a file under ``project_root/refs/``."""
