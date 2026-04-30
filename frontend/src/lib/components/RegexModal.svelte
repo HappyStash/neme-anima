@@ -30,8 +30,11 @@
       const out: { before: string; after: string }[] = [];
       for (const fn of sample) {
         const t = await api.getTags(slug, fn);
-        const after = t.text.replace(re, replacement);
-        if (after !== t.text) out.push({ before: t.text, after });
+        // The server applies the regex only to the danbooru (first) line.
+        // Preview the same way so the user sees the actual diff.
+        const firstLine = t.text.split("\n", 1)[0];
+        const after = firstLine.replace(re, replacement);
+        if (after !== firstLine) out.push({ before: firstLine, after });
       }
       preview = out;
     } catch (e) {
@@ -70,7 +73,11 @@
     onkeydown={(e) => e.stopPropagation()}
   >
     <h2 class="text-lg font-semibold mb-1">Bulk regex tag replace</h2>
-    <p class="text-xs text-slate-500 mb-4">{filenames.length} frame{filenames.length === 1 ? "" : "s"} selected</p>
+    <p class="text-xs text-slate-500 mb-2">{filenames.length} frame{filenames.length === 1 ? "" : "s"} selected · operates on the danbooru tag line only (LLM description preserved)</p>
+    <p class="text-[11px] text-slate-600 mb-4 leading-snug">
+      Tip: pattern <code class="text-slate-400">^</code> with replacement <code class="text-slate-400">new_tag,&nbsp;</code> prepends a tag.
+      Pattern <code class="text-slate-400">$</code> with replacement <code class="text-slate-400">,&nbsp;new_tag</code> appends one.
+    </p>
 
     <div class="space-y-3">
       <label class="block">

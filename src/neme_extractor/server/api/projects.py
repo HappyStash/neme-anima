@@ -23,10 +23,18 @@ class RegisterBody(BaseModel):
     folder: str
 
 
+class LLMConfigBody(BaseModel):
+    enabled: bool | None = None
+    endpoint: str | None = None
+    model: str | None = None
+    prompt: str | None = None
+
+
 class PatchProjectBody(BaseModel):
     name: str | None = None
     thresholds_overrides: dict | None = None
     pause_before_tag: bool | None = None
+    llm: LLMConfigBody | None = None
 
 
 class DeleteProjectBody(BaseModel):
@@ -54,6 +62,7 @@ def _project_view(project: Project) -> dict:
         "thresholds_overrides": project.thresholds_overrides,
         "source_root": project.source_root,
         "pause_before_tag": project.pause_before_tag,
+        "llm": asdict(project.llm),
     }
 
 
@@ -155,6 +164,15 @@ async def patch_project(request: Request, slug: str, body: PatchProjectBody) -> 
         project.thresholds_overrides = body.thresholds_overrides
     if body.pause_before_tag is not None:
         project.pause_before_tag = body.pause_before_tag
+    if body.llm is not None:
+        if body.llm.enabled is not None:
+            project.llm.enabled = body.llm.enabled
+        if body.llm.endpoint is not None:
+            project.llm.endpoint = body.llm.endpoint
+        if body.llm.model is not None:
+            project.llm.model = body.llm.model
+        if body.llm.prompt is not None:
+            project.llm.prompt = body.llm.prompt
     project.save()
     request.app.state.registry.register(project)  # refresh name
     return _project_view(project)

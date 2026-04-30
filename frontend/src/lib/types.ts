@@ -14,6 +14,13 @@ export interface RefImage {
   added_at: string;
 }
 
+export interface LLMConfig {
+  enabled: boolean;
+  endpoint: string;
+  model: string;
+  prompt: string;
+}
+
 export interface ProjectView {
   slug: string;
   name: string;
@@ -24,6 +31,7 @@ export interface ProjectView {
   thresholds_overrides: Record<string, Record<string, unknown>>;
   source_root: string | null;
   pause_before_tag: boolean;
+  llm: LLMConfig;
 }
 
 export interface ProjectListEntry {
@@ -46,6 +54,9 @@ export interface FrameRecord {
   timestamp_seconds: number;
   ccip_distance: number;
   score: number;
+  /** True when the .txt sidecar has a non-empty second line (an LLM
+   *  description). Drives the at-a-glance "described" badge in the grid. */
+  has_description: boolean;
 }
 
 export interface FramesPage {

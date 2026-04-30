@@ -80,6 +80,64 @@
     pauseBeforeTag = projectsStore.active?.pause_before_tag ?? true;
   });
 
+  // ---------------- LLM tagging ----------------
+
+  let llmEnabled = $state<boolean>(
+    projectsStore.active?.llm?.enabled ?? false,
+  );
+  let llmEndpoint = $state<string>(
+    projectsStore.active?.llm?.endpoint || "http://localhost:1234",
+  );
+  let llmModel = $state<string>(projectsStore.active?.llm?.model ?? "");
+  let llmPrompt = $state<string>(projectsStore.active?.llm?.prompt ?? "");
+  let llmModelsAvailable = $state<string[]>(
+    projectsStore.active?.llm?.model ? [projectsStore.active.llm.model] : [],
+  );
+  let llmDiscovering = $state(false);
+  let llmDiscoverError = $state<string | null>(null);
+  let llmDiscoverOk = $state<boolean>(false);
+
+  $effect(() => {
+    const llm = projectsStore.active?.llm;
+    if (!llm) return;
+    llmEnabled = llm.enabled;
+    llmEndpoint = llm.endpoint || "http://localhost:1234";
+    llmModel = llm.model || "";
+    llmPrompt = llm.prompt || "";
+    if (llm.model && !llmModelsAvailable.includes(llm.model)) {
+      llmModelsAvailable = [llm.model];
+    }
+  });
+
+  // Toggle is gated on having picked a model — avoids the "enabled but no
+  // model selected" footgun and matches the user's "disable if no model"
+  // requirement without storing it as a separate flag.
+  let llmCanEnable = $derived(!!llmModel.trim());
+
+  async function discoverLLMModels() {
+    llmDiscovering = true;
+    llmDiscoverError = null;
+    llmDiscoverOk = false;
+    try {
+      const resp = await api.discoverLLMModels(llmEndpoint.trim());
+      llmModelsAvailable = resp.models;
+      llmDiscoverOk = true;
+      // If the previously-saved model isn't in the new list, blank it so the
+      // user has to pick again — keeps the dropdown honest.
+      if (llmModel && !resp.models.includes(llmModel)) {
+        llmModel = "";
+      } else if (!llmModel && resp.models.length > 0) {
+        // First-time discovery convenience: preselect the first model.
+        llmModel = resp.models[0];
+      }
+    } catch (e) {
+      llmDiscoverError = e instanceof Error ? e.message : String(e);
+      llmModelsAvailable = [];
+    } finally {
+      llmDiscovering = false;
+    }
+  }
+
   async function save() {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
@@ -88,6 +146,14 @@
       await api.patchProject(slug, {
         thresholds_overrides: overrides,
         pause_before_tag: pauseBeforeTag,
+        llm: {
+          // Force disabled if no model selected — server-side has the same
+          // guard but enforcing it here keeps the saved state self-consistent.
+          enabled: llmEnabled && !!llmModel.trim(),
+          endpoint: llmEndpoint.trim(),
+          model: llmModel.trim(),
+          prompt: llmPrompt,
+        },
       });
       await projectsStore.load(slug);
       savedAt = Date.now();
@@ -142,6 +208,98 @@
           pipeline tags inline as it runs.
         </span>
       </span>
+    </label>
+  </div>
+
+  <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+    <div class="flex items-center justify-between mb-3">
+      <h3 class="text-sm font-medium text-slate-200">LLM image description</h3>
+      <span class="text-[10px] uppercase tracking-wide text-slate-500">
+        adds a 2nd row to each .txt
+      </span>
+    </div>
+
+    <p class="text-xs text-slate-500 mb-3">
+      After WD14 tagging, optionally call an OpenAI-compatible vision endpoint
+      (e.g. LMStudio at <code class="text-slate-400">http://localhost:1234</code>)
+      to write a 1-2 sentence description as the second line of each caption file.
+      Disabled by default and stays off until a model is selected.
+    </p>
+
+    <label class="flex items-start gap-3 cursor-pointer mb-4">
+      <input
+        type="checkbox"
+        bind:checked={llmEnabled}
+        disabled={!llmCanEnable}
+        class="mt-0.5 w-4 h-4 rounded bg-ink-950 border-ink-700 accent-accent-500 disabled:opacity-40"
+      />
+      <span class="flex-1">
+        <span class="block text-sm text-slate-200">Enable LLM tagging</span>
+        <span class="block text-xs text-slate-500 mt-0.5">
+          {llmCanEnable
+            ? "Each tagged frame will also receive a generated description."
+            : "Pick a model below first — the toggle unlocks once a model is selected."}
+        </span>
+      </span>
+    </label>
+
+    <div class="grid grid-cols-[1fr_auto] gap-2 items-end mb-3">
+      <label class="block">
+        <span class="text-[10px] uppercase tracking-wide text-slate-500">Endpoint</span>
+        <input
+          bind:value={llmEndpoint}
+          placeholder="http://localhost:1234"
+          class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-sm font-mono focus:outline-none focus:border-accent-500"
+        />
+      </label>
+      <button
+        type="button"
+        onclick={discoverLLMModels}
+        disabled={llmDiscovering || !llmEndpoint.trim()}
+        class="px-3 py-1.5 text-xs rounded bg-ink-800 hover:bg-ink-700 text-slate-200 border border-ink-700 disabled:opacity-40 disabled:cursor-not-allowed"
+      >{llmDiscovering ? "Probing…" : "Discover models"}</button>
+    </div>
+
+    {#if llmDiscoverError}
+      <p class="text-xs text-red-400 mb-2 break-all">{llmDiscoverError}</p>
+    {:else if llmDiscoverOk}
+      <p class="text-xs text-emerald-400 mb-2">
+        Endpoint reachable — {llmModelsAvailable.length} model{llmModelsAvailable.length === 1 ? "" : "s"} found.
+      </p>
+    {/if}
+
+    <label class="block mb-3">
+      <span class="text-[10px] uppercase tracking-wide text-slate-500">Model</span>
+      {#if llmModelsAvailable.length === 0}
+        <select
+          disabled
+          class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-sm font-mono opacity-50"
+        >
+          <option>— Discover models first —</option>
+        </select>
+      {:else}
+        <select
+          bind:value={llmModel}
+          class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-sm font-mono focus:outline-none focus:border-accent-500"
+        >
+          <option value="">— Pick a model —</option>
+          {#each llmModelsAvailable as m (m)}
+            <option value={m}>{m}</option>
+          {/each}
+        </select>
+      {/if}
+    </label>
+
+    <label class="block">
+      <span class="text-[10px] uppercase tracking-wide text-slate-500">
+        Prompt (optional override)
+      </span>
+      <textarea
+        bind:value={llmPrompt}
+        rows="3"
+        placeholder="Leave blank to use the built-in LoRA caption prompt."
+        class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-xs font-mono focus:outline-none focus:border-accent-500 resize-y"
+      ></textarea>
     </label>
   </div>
 

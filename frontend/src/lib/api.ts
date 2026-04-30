@@ -1,5 +1,5 @@
 import type {
-  FrameRecord, FramesPage, ProjectListEntry, ProjectView, QueueItem,
+  FrameRecord, FramesPage, LLMConfig, ProjectListEntry, ProjectView, QueueItem,
 } from "./types";
 
 export class ApiError extends Error {
@@ -41,6 +41,7 @@ export const patchProject = (
     name?: string;
     thresholds_overrides?: Record<string, Record<string, unknown>>;
     pause_before_tag?: boolean;
+    llm?: Partial<LLMConfig>;
   },
 ) => request<ProjectView>(`/api/projects/${encodeURIComponent(slug)}`, {
   method: "PATCH", body: JSON.stringify(body),
@@ -155,6 +156,17 @@ export const putTags = (slug: string, filename: string, text: string) =>
     { method: "PUT", body: JSON.stringify({ text }) },
   );
 
+export const getDescription = (slug: string, filename: string) =>
+  request<{ text: string }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/description`,
+  );
+
+export const putDescription = (slug: string, filename: string, text: string) =>
+  request<{ text: string }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/description`,
+    { method: "PUT", body: JSON.stringify({ text }) },
+  );
+
 export const deleteFrame = (slug: string, filename: string) =>
   request<void>(
     `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}`,
@@ -174,6 +186,25 @@ export const bulkTagsReplace = (
   `/api/projects/${encodeURIComponent(slug)}/frames/bulk-tags-replace`,
   { method: "POST", body: JSON.stringify(body) },
 );
+
+export const bulkRetagDanbooru = (slug: string, filenames: string[]) =>
+  request<{ retagged: number; total: number }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/bulk-retag-danbooru`,
+    { method: "POST", body: JSON.stringify({ filenames }) },
+  );
+
+export const bulkRetagLLM = (slug: string, filenames: string[]) =>
+  request<{ described: number; total: number; error: string | null }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/bulk-retag-llm`,
+    { method: "POST", body: JSON.stringify({ filenames }) },
+  );
+
+// ---- llm ----
+
+export const discoverLLMModels = (endpoint: string) =>
+  request<{ models: string[] }>(`/api/llm/discover-models`, {
+    method: "POST", body: JSON.stringify({ endpoint }),
+  });
 
 export const frameImageUrl = (slug: string, filename: string) =>
   `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/image`;

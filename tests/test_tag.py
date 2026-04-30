@@ -9,7 +9,7 @@ import pytest
 from PIL import Image
 
 from neme_extractor.config import TagConfig
-from neme_extractor.tag import Tagger, write_tags_sidecar
+from neme_extractor.tag import Tagger, join_sidecar, split_sidecar, write_tags_sidecar
 
 
 def test_write_tags_sidecar_produces_txt(tmp_path: Path):
@@ -39,6 +39,42 @@ def test_compose_text_orders_character_first():
         character={"some_character": 0.99},
     )
     assert text.startswith("some_character")
+
+
+def test_split_sidecar_one_line():
+    danbooru, description = split_sidecar("1girl, smile\n")
+    assert danbooru == "1girl, smile"
+    assert description == ""
+
+
+def test_split_sidecar_two_lines():
+    danbooru, description = split_sidecar(
+        "1girl, smile\nA young woman smiling.\n"
+    )
+    assert danbooru == "1girl, smile"
+    assert description == "A young woman smiling."
+
+
+def test_split_sidecar_tolerates_blank_between_rows():
+    """Some editors insert a stray blank between the tag line and the
+    description — keep the description intact regardless."""
+    danbooru, description = split_sidecar(
+        "1girl, smile\n\nA young woman smiling.\n"
+    )
+    assert danbooru == "1girl, smile"
+    assert description == "A young woman smiling."
+
+
+def test_join_sidecar_collapses_to_one_line_when_no_description():
+    """Round-tripping a sidecar that never had a description must stay
+    byte-identical so we don't silently rewrite every existing file."""
+    text = join_sidecar("1girl, smile", "")
+    assert text == "1girl, smile\n"
+
+
+def test_join_sidecar_two_line_when_description_present():
+    text = join_sidecar("1girl, smile", "A young woman smiling.")
+    assert text == "1girl, smile\nA young woman smiling.\n"
 
 
 @pytest.mark.gpu

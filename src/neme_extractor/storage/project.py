@@ -60,6 +60,23 @@ class RefImage:
 
 
 @dataclass
+class LLMConfig:
+    """Optional second-pass image-description tagger using an OpenAI-compatible
+    chat-completions endpoint (LMStudio by default).
+
+    ``enabled`` only flips on once the user has both pointed at a reachable
+    server and picked a model from its discovery response — see
+    :func:`neme_extractor.llm.discover_models`. The pipeline treats
+    ``enabled=False`` *or* ``model==""`` as off, so the disabled-by-default
+    behaviour falls out without an extra check.
+    """
+    enabled: bool = False
+    endpoint: str = "http://localhost:1234"
+    model: str = ""
+    prompt: str = ""  # empty = use llm.DEFAULT_PROMPT
+
+
+@dataclass
 class Project:
     name: str
     slug: str
@@ -74,6 +91,7 @@ class Project:
     # user a chance to delete unwanted frames so they don't pay the tagging
     # cost on them. False = tag inline like the original pipeline.
     pause_before_tag: bool = True
+    llm: LLMConfig = field(default_factory=LLMConfig)
 
     # ---------------- factory methods ----------------
 
@@ -103,6 +121,7 @@ class Project:
         root = Path(root)
         with open(root / "project.json") as f:
             data = json.load(f)
+        llm_raw = data.get("llm") or {}
         return cls(
             name=data["name"],
             slug=data["slug"],
@@ -113,6 +132,12 @@ class Project:
             thresholds_overrides=data.get("thresholds_overrides", {}),
             source_root=data.get("source_root"),
             pause_before_tag=bool(data.get("pause_before_tag", True)),
+            llm=LLMConfig(
+                enabled=bool(llm_raw.get("enabled", False)),
+                endpoint=str(llm_raw.get("endpoint") or "http://localhost:1234"),
+                model=str(llm_raw.get("model") or ""),
+                prompt=str(llm_raw.get("prompt") or ""),
+            ),
         )
 
     def save(self) -> None:
@@ -125,6 +150,7 @@ class Project:
             "thresholds_overrides": self.thresholds_overrides,
             "source_root": self.source_root,
             "pause_before_tag": self.pause_before_tag,
+            "llm": asdict(self.llm),
         }
         tmp = self.root / "project.json.tmp"
         tmp.write_text(json.dumps(out, indent=2))

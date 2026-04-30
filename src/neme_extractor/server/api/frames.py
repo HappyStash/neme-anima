@@ -14,6 +14,7 @@ from pydantic import BaseModel
 
 from neme_extractor.storage.metadata import FrameRecord, MetadataLog
 from neme_extractor.storage.project import Project
+from neme_extractor.tag import join_sidecar, split_sidecar
 
 router = APIRouter(prefix="/api/projects", tags=["frames"])
 
@@ -31,6 +32,10 @@ class PutTagsBody(BaseModel):
     text: str
 
 
+class PutDescriptionBody(BaseModel):
+    text: str
+
+
 class BulkDeleteBody(BaseModel):
     filenames: list[str]
 
@@ -40,6 +45,10 @@ class BulkReplaceBody(BaseModel):
     pattern: str
     replacement: str
     case_insensitive: bool = False
+
+
+class BulkRetagBody(BaseModel):
+    filenames: list[str]
 
 
 class CropBody(BaseModel):
@@ -105,8 +114,25 @@ async def list_frames(
             "timestamp_seconds": rec.timestamp_seconds,
             "ccip_distance": rec.ccip_distance,
             "score": rec.score,
+            "has_description": _has_description(kept_dir / f"{rec.filename}.txt"),
         })
     return {"count": len(items), "items": items[offset: offset + limit]}
+
+
+def _has_description(txt_path: Path) -> bool:
+    """True if the sidecar has a non-empty second row.
+
+    Reads the file rather than just stat'ing — a stale .txt with whitespace
+    on row 2 should still count as "no description" so the grid badge stays
+    honest. The files are tiny (a few hundred bytes) so this is cheap.
+    """
+    if not txt_path.is_file():
+        return False
+    try:
+        _, description = split_sidecar(txt_path.read_text(encoding="utf-8"))
+    except OSError:
+        return False
+    return bool(description)
 
 
 @router.get("/{slug}/frames/{filename}/image")
@@ -134,6 +160,33 @@ async def put_tags(request: Request, slug: str, filename: str, body: PutTagsBody
     if not png.exists():
         raise HTTPException(status_code=404, detail="frame not found")
     txt.write_text(body.text + "\n", encoding="utf-8")
+    return {"text": body.text}
+
+
+@router.get("/{slug}/frames/{filename}/description")
+async def get_description(request: Request, slug: str, filename: str) -> dict:
+    """Return only the LLM description (line 2 of the sidecar)."""
+    project = _load(request, slug)
+    _, txt = _frame_paths(project, filename)
+    if not txt.exists():
+        return {"text": ""}
+    _, description = split_sidecar(txt.read_text(encoding="utf-8"))
+    return {"text": description}
+
+
+@router.put("/{slug}/frames/{filename}/description")
+async def put_description(
+    request: Request, slug: str, filename: str, body: PutDescriptionBody,
+) -> dict:
+    """Replace only the description line; the danbooru tag line is preserved."""
+    project = _load(request, slug)
+    png, txt = _frame_paths(project, filename)
+    if not png.exists():
+        raise HTTPException(status_code=404, detail="frame not found")
+    danbooru = ""
+    if txt.exists():
+        danbooru, _ = split_sidecar(txt.read_text(encoding="utf-8"))
+    txt.write_text(join_sidecar(danbooru, body.text), encoding="utf-8")
     return {"text": body.text}
 
 
@@ -165,6 +218,14 @@ async def bulk_delete(request: Request, slug: str, body: BulkDeleteBody) -> dict
 async def bulk_tags_replace(
     request: Request, slug: str, body: BulkReplaceBody,
 ) -> dict:
+    """Run a regex over the *danbooru* line only — the LLM description on row
+    two stays untouched so the user can rewrite tags without disturbing
+    captions written by a separate model.
+
+    Tip for adding tags: use a pattern like ``^`` with replacement ``new_tag, ``
+    to prepend, or ``$`` with replacement ``, new_tag`` to append. To replace
+    the whole tag set, use ``.*`` with the new comma-separated string.
+    """
     flags = re.IGNORECASE if body.case_insensitive else 0
     try:
         regex = re.compile(body.pattern, flags)
@@ -177,11 +238,98 @@ async def bulk_tags_replace(
         if not txt.exists():
             continue
         before = txt.read_text(encoding="utf-8")
-        after, n = regex.subn(body.replacement, before)
-        if n > 0 and after != before:
-            txt.write_text(after, encoding="utf-8")
+        danbooru, description = split_sidecar(before)
+        new_danbooru, n = regex.subn(body.replacement, danbooru)
+        if n > 0 and new_danbooru != danbooru:
+            txt.write_text(join_sidecar(new_danbooru, description), encoding="utf-8")
             changed += n
     return {"changed": changed}
+
+
+@router.post("/{slug}/frames/bulk-retag-danbooru")
+async def bulk_retag_danbooru(
+    request: Request, slug: str, body: BulkRetagBody,
+) -> dict:
+    """Re-run the WD14 tagger on selected frames; preserves the LLM line."""
+    import numpy as np
+    from PIL import Image
+
+    project = _load(request, slug)
+    tagger = _get_or_make_tagger(request)
+
+    def _tag_one(filename: str) -> bool:
+        png, txt = _frame_paths(project, filename)
+        if not png.exists():
+            return False
+        with Image.open(png) as im:
+            arr = np.array(im.convert("RGB"))
+        new_danbooru = tagger.tag(arr).text
+        old_text = txt.read_text(encoding="utf-8") if txt.exists() else ""
+        _, description = split_sidecar(old_text)
+        txt.write_text(join_sidecar(new_danbooru, description), encoding="utf-8")
+        return True
+
+    retagged = 0
+    for filename in body.filenames:
+        try:
+            ok = await asyncio.to_thread(_tag_one, filename)
+        except Exception:
+            ok = False
+        if ok:
+            retagged += 1
+    return {"retagged": retagged, "total": len(body.filenames)}
+
+
+@router.post("/{slug}/frames/bulk-retag-llm")
+async def bulk_retag_llm(
+    request: Request, slug: str, body: BulkRetagBody,
+) -> dict:
+    """Re-run the LLM description on selected frames; preserves the danbooru
+    line. Returns 422 if the project has no LLM model configured — the
+    frontend won't show the button in that state, but a stale tab might still
+    fire it.
+    """
+    from neme_extractor.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
+
+    project = _load(request, slug)
+    if not project.llm.model:
+        raise HTTPException(
+            status_code=422,
+            detail="LLM tagging not configured: pick a model in Settings first",
+        )
+    endpoint = project.llm.endpoint
+    model = project.llm.model
+    prompt = project.llm.prompt or DEFAULT_PROMPT
+
+    def _describe_one(filename: str) -> tuple[bool, str | None]:
+        png, txt = _frame_paths(project, filename)
+        if not png.exists():
+            return False, None
+        old_text = txt.read_text(encoding="utf-8") if txt.exists() else ""
+        danbooru, _ = split_sidecar(old_text)
+        try:
+            description = describe_image(
+                endpoint=endpoint, model=model, image_path=png,
+                prompt=prompt, danbooru_tags=danbooru or None,
+            )
+        except LLMUnavailable as exc:
+            return False, str(exc)
+        txt.write_text(join_sidecar(danbooru, description), encoding="utf-8")
+        return True, None
+
+    described = 0
+    last_error: str | None = None
+    for filename in body.filenames:
+        ok, err = await asyncio.to_thread(_describe_one, filename)
+        if ok:
+            described += 1
+        elif err:
+            last_error = err
+    return {
+        "described": described,
+        "total": len(body.filenames),
+        "error": last_error,
+    }
 
 
 def _record_to_dict(rec: FrameRecord) -> dict:
@@ -353,8 +501,28 @@ async def upload_frames(
                 tag_text = await asyncio.to_thread(_do_tag, png_path)
             except Exception:
                 tag_text = ""
+
+            description = ""
+            if project.llm.enabled and project.llm.model:
+                from neme_extractor.llm import (
+                    DEFAULT_PROMPT, LLMUnavailable, describe_image,
+                )
+
+                def _do_describe() -> str:
+                    return describe_image(
+                        endpoint=project.llm.endpoint,
+                        model=project.llm.model,
+                        image_path=png_path,
+                        prompt=project.llm.prompt or DEFAULT_PROMPT,
+                        danbooru_tags=tag_text or None,
+                    )
+
+                try:
+                    description = await asyncio.to_thread(_do_describe)
+                except (LLMUnavailable, Exception):
+                    description = ""
             png_path.with_suffix(".txt").write_text(
-                tag_text + "\n", encoding="utf-8",
+                join_sidecar(tag_text, description), encoding="utf-8",
             )
 
             rec = FrameRecord(

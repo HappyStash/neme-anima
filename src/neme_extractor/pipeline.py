@@ -22,7 +22,7 @@ from neme_extractor.output import OutputWriter
 from neme_extractor.pipeline_progress import NULL_PROGRESS, PipelineProgress
 from neme_extractor.storage.metadata import FrameRecord
 from neme_extractor.storage.project import Project
-from neme_extractor.tag import Tagger
+from neme_extractor.tag import Tagger, join_sidecar, split_sidecar
 from neme_extractor.track import Tracklet, track_scene
 from neme_extractor.video import Video, detect_scenes
 
@@ -243,6 +243,7 @@ def _run_tag_stage(
         return
 
     tagger = Tagger(thresholds.tag)
+    llm_active = bool(project.llm.enabled and project.llm.model)
     with _make_progress() as p:
         task = p.add_task("tag", total=len(pending))
         tagged = 0
@@ -250,12 +251,40 @@ def _run_tag_stage(
             with Image.open(png) as im:
                 arr = np.array(im.convert("RGB"))
             tag_res = tagger.tag(arr)
-            png.with_suffix(".txt").write_text(tag_res.text + "\n", encoding="utf-8")
+            description = ""
+            if llm_active:
+                description = _safe_describe(png, project, tag_res.text)
+            png.with_suffix(".txt").write_text(
+                join_sidecar(tag_res.text, description), encoding="utf-8",
+            )
             tagged += 1
             p.advance(task)
             progress.stage_advance("tag")
             progress.stage_message("tag", f"{tagged} / {len(pending)} frames")
     progress.stage_done("tag", message=f"{tagged} frame{'s' if tagged != 1 else ''} tagged")
+
+
+def _safe_describe(png: Path, project, danbooru_tags: str) -> str:
+    """Run the LLM description without taking down the whole pipeline on a
+    transient endpoint hiccup — log and skip instead. The user can re-trigger
+    LLM tagging from the frames toolbar after fixing the endpoint.
+    """
+    from neme_extractor.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
+
+    try:
+        return describe_image(
+            endpoint=project.llm.endpoint,
+            model=project.llm.model,
+            image_path=png,
+            prompt=project.llm.prompt or DEFAULT_PROMPT,
+            danbooru_tags=danbooru_tags,
+        )
+    except LLMUnavailable as exc:
+        console.print(f"[yellow]llm describe failed for {png.name}: {exc}[/yellow]")
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        console.print(f"[yellow]llm describe error for {png.name}: {exc}[/yellow]")
+        return ""
 
 
 def _save_one_rejected_sample(

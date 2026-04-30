@@ -64,3 +64,39 @@ def write_tags_sidecar(image_path: Path, tag_text: str) -> Path:
     txt = image_path.with_suffix(".txt")
     txt.write_text(tag_text + "\n", encoding="utf-8")
     return txt
+
+
+def split_sidecar(text: str) -> tuple[str, str]:
+    """Return ``(danbooru_line, llm_description)`` from a sidecar's text.
+
+    The sidecar layout is two-line: comma-separated WD14 tags on row 1, then
+    an optional LLM description on row 2. Anything past the second non-empty
+    line is preserved into the description so we never silently drop content.
+    """
+    if not text:
+        return "", ""
+    # rstrip only the trailing newline(s) — internal blank lines are unusual
+    # but we tolerate them by skipping leading blanks before the description.
+    lines = text.splitlines()
+    danbooru = lines[0].strip() if lines else ""
+    rest = lines[1:]
+    # Drop a single leading blank between rows so editors that double-newline
+    # don't blow up the description with a phantom empty line.
+    while rest and not rest[0].strip():
+        rest = rest[1:]
+    description = "\n".join(rest).rstrip()
+    return danbooru, description
+
+
+def join_sidecar(danbooru: str, description: str) -> str:
+    """Render ``(danbooru, description)`` back into the two-line sidecar form.
+
+    Always trailing-newline terminated for POSIX-friendly diffs. An empty
+    description collapses to a single line so files written before LLM
+    tagging existed stay byte-identical when round-tripped.
+    """
+    danbooru = danbooru.rstrip()
+    description = description.strip()
+    if description:
+        return f"{danbooru}\n{description}\n"
+    return f"{danbooru}\n"

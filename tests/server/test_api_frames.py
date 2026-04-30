@@ -136,6 +136,135 @@ async def test_bulk_tags_replace_invalid_regex_returns_422(
     assert resp.status_code == 422
 
 
+async def test_bulk_tags_replace_only_touches_first_line(
+    client, project_with_frames: Project,
+):
+    """The regex must match the danbooru tag line only — the LLM description
+    on row two stays byte-identical so users can rewrite tags without losing
+    captions written by a separate model."""
+    name = "ep01__s000_t001_f000010"
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "red_eyes, blue_hair\nA young woman with red eyes stands in a park.\n",
+        encoding="utf-8",
+    )
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-tags-replace",
+        json={
+            "filenames": [name],
+            "pattern": r"red_eyes",
+            "replacement": "ruby_eyes",
+        },
+    )
+    assert resp.status_code == 200
+    text = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    # Tag line rewritten…
+    assert text.startswith("ruby_eyes, blue_hair\n")
+    # …description line untouched (still says "red eyes").
+    assert "A young woman with red eyes" in text
+
+
+async def test_bulk_tags_replace_can_prepend_a_tag(
+    client, project_with_frames: Project,
+):
+    """Demonstrates the "how to add tags" answer for the user: anchored
+    regexes act as insertion points."""
+    name = "ep01__s000_t001_f000010"
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "1girl, smile\n", encoding="utf-8",
+    )
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-tags-replace",
+        json={
+            "filenames": [name],
+            "pattern": r"^",
+            "replacement": "masterpiece, ",
+        },
+    )
+    assert resp.status_code == 200
+    text = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert text == "masterpiece, 1girl, smile\n"
+
+
+async def test_bulk_retag_llm_422_when_no_model(
+    client, project_with_frames: Project,
+):
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/bulk-retag-llm",
+        json={"filenames": ["ep01__s000_t001_f000010"]},
+    )
+    assert resp.status_code == 422
+
+
+async def test_list_frames_has_description_flag(
+    client, project_with_frames: Project,
+):
+    """The grid uses this flag to render an at-a-glance "described" badge —
+    must reflect line 2 presence, not just file existence."""
+    described = "ep01__s000_t001_f000010"
+    plain = "ep02__s000_t001_f000020"
+    (project_with_frames.kept_dir / f"{described}.txt").write_text(
+        "1girl, smile\nA young woman smiling against a wood panel wall.\n",
+        encoding="utf-8",
+    )
+    (project_with_frames.kept_dir / f"{plain}.txt").write_text(
+        "1girl, smile\n", encoding="utf-8",
+    )
+    resp = await client.get(f"/api/projects/{project_with_frames.slug}/frames")
+    assert resp.status_code == 200
+    by_name = {f["filename"]: f for f in resp.json()["items"]}
+    assert by_name[described]["has_description"] is True
+    assert by_name[plain]["has_description"] is False
+
+
+async def test_get_description_returns_only_second_line(
+    client, project_with_frames: Project,
+):
+    name = "ep01__s000_t001_f000010"
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "1girl, smile\nA young woman smiling against a wood panel wall.\n",
+        encoding="utf-8",
+    )
+    resp = await client.get(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/description"
+    )
+    assert resp.status_code == 200
+    assert resp.json()["text"] == "A young woman smiling against a wood panel wall."
+
+
+async def test_put_description_preserves_danbooru_line(
+    client, project_with_frames: Project,
+):
+    name = "ep01__s000_t001_f000010"
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "1girl, smile\nold description\n", encoding="utf-8",
+    )
+    resp = await client.put(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/description",
+        json={"text": "brand new caption"},
+    )
+    assert resp.status_code == 200
+    text = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert text == "1girl, smile\nbrand new caption\n"
+
+
+async def test_put_description_empty_collapses_to_one_line(
+    client, project_with_frames: Project,
+):
+    """Clearing the description must round-trip back to the single-line
+    sidecar form so files written before LLM tagging stay byte-clean."""
+    name = "ep01__s000_t001_f000010"
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "1girl, smile\nold description\n", encoding="utf-8",
+    )
+    resp = await client.put(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/description",
+        json={"text": ""},
+    )
+    assert resp.status_code == 200
+    text = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert text == "1girl, smile\n"
+
+
 async def test_get_frame_image(client, project_with_frames: Project):
     name = "ep01__s000_t001_f000010"
     resp = await client.get(f"/api/projects/{project_with_frames.slug}/frames/{name}/image")

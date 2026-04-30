@@ -16,6 +16,13 @@
   let total = $derived(framesStore.items.length);
   let allSelected = $derived(count > 0 && count === total);
 
+  // The LLM-retag button only renders when the project has a model picked —
+  // matches Settings logic so a user can't fire a doomed retag against an
+  // unconfigured endpoint.
+  let llmModelSelected = $derived(!!projectsStore.active?.llm?.model);
+
+  let retagBusy = $state(false);
+
   async function deleteSelected() {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
@@ -24,6 +31,41 @@
     if (!confirm(`Delete ${filenames.length} frame${filenames.length === 1 ? "" : "s"}?`)) return;
     await api.bulkDeleteFrames(slug, filenames);
     framesStore.removeLocal(filenames);
+  }
+
+  async function retagDanbooru() {
+    const slug = projectsStore.active?.slug;
+    if (!slug || retagBusy) return;
+    const filenames = framesStore.selectedFilenames();
+    if (filenames.length === 0) return;
+    retagBusy = true;
+    try {
+      const res = await api.bulkRetagDanbooru(slug, filenames);
+      alert(`Re-tagged ${res.retagged} of ${res.total} frame${res.total === 1 ? "" : "s"}.`);
+    } catch (e) {
+      alert(`Re-tag failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      retagBusy = false;
+    }
+  }
+
+  async function retagLLM() {
+    const slug = projectsStore.active?.slug;
+    if (!slug || retagBusy) return;
+    const filenames = framesStore.selectedFilenames();
+    if (filenames.length === 0) return;
+    retagBusy = true;
+    try {
+      const res = await api.bulkRetagLLM(slug, filenames);
+      const msg = res.error
+        ? `Described ${res.described} of ${res.total}. Last error: ${res.error}`
+        : `Described ${res.described} of ${res.total} frame${res.total === 1 ? "" : "s"}.`;
+      alert(msg);
+    } catch (e) {
+      alert(`LLM tagging failed: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      retagBusy = false;
+    }
   }
 
   function toggleSelectAll() {
@@ -61,6 +103,22 @@
           onclick={onopenRegex}
           class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center"
         >Regex…</button>
+        <button
+          type="button"
+          onclick={retagDanbooru}
+          disabled={retagBusy}
+          title="Re-run WD14 tagger on selected frames (preserves the LLM description line)"
+          class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+        >Re-tag</button>
+        {#if llmModelSelected}
+          <button
+            type="button"
+            onclick={retagLLM}
+            disabled={retagBusy}
+            title="Re-run LLM description on selected frames (preserves WD14 tags)"
+            class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+          >Describe</button>
+        {/if}
         <button
           type="button"
           onclick={() => framesStore.clear()}

@@ -89,6 +89,38 @@ async def test_patch_thresholds_overrides(client, tmp_path: Path):
     assert reloaded.thresholds_overrides["identify"]["body_max_distance_loose"] == 0.22
 
 
+async def test_patch_llm_config_persists_and_returns_in_view(
+    client, tmp_path: Path,
+):
+    Project.create(tmp_path / "p", name="p")
+    await client.post("/api/projects/register", json={"folder": str(tmp_path / "p")})
+
+    # Default view: disabled, default endpoint, no model selected.
+    resp = await client.get("/api/projects/p")
+    assert resp.json()["llm"] == {
+        "enabled": False,
+        "endpoint": "http://localhost:1234",
+        "model": "",
+        "prompt": "",
+    }
+
+    # Patch only some fields — others stay untouched.
+    resp = await client.patch("/api/projects/p", json={
+        "llm": {"enabled": True, "model": "qwen2-vl-7b"}
+    })
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["llm"]["enabled"] is True
+    assert body["llm"]["model"] == "qwen2-vl-7b"
+    # Endpoint preserved at default since the patch didn't touch it.
+    assert body["llm"]["endpoint"] == "http://localhost:1234"
+
+    # Persisted on disk.
+    reloaded = Project.load(tmp_path / "p")
+    assert reloaded.llm.enabled is True
+    assert reloaded.llm.model == "qwen2-vl-7b"
+
+
 async def test_delete_project_unregisters_only(client, tmp_path: Path):
     Project.create(tmp_path / "p", name="p")
     await client.post("/api/projects/register", json={"folder": str(tmp_path / "p")})

@@ -152,13 +152,14 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     # Routers added later (Tasks 6-10) — currently stubs.
-    from neme_extractor.server.api import projects, sources, refs, frames
+    from neme_extractor.server.api import projects, sources, refs, frames, llm
     from neme_extractor.server.api import queue as queue_routes
     from neme_extractor.server.api import ws as ws_routes
     app.include_router(projects.router)
     app.include_router(sources.router)
     app.include_router(refs.router)
     app.include_router(frames.router)
+    app.include_router(llm.router)
     app.include_router(queue_routes.router)
     app.include_router(ws_routes.router)
 
