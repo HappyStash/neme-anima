@@ -23,6 +23,7 @@ export interface ProjectView {
   refs: RefImage[];
   thresholds_overrides: Record<string, Record<string, unknown>>;
   source_root: string | null;
+  pause_before_tag: boolean;
 }
 
 export interface ProjectListEntry {
@@ -87,6 +88,10 @@ export interface JobStages {
   stages: PipelineStage[];
   summary: { kept?: number; rejected?: number } | null;
   updated_at: number;
+  /** True when the runner is parked at wait_for_resume() and a click on the
+   *  yellow pause indicator will release it. */
+  paused?: boolean;
+  pause_message?: string;
 }
 
 export interface ServerEvent {

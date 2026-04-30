@@ -1,4 +1,5 @@
 <script lang="ts">
+  import * as api from "$lib/api";
   import type { JobStages, PipelineStage } from "$lib/types";
 
   type Props = { job: JobStages };
@@ -6,6 +7,7 @@
 
   let allDone = $derived(job.stages.every((s) => s.status === "done"));
   let anyFailed = $derived(job.stages.some((s) => s.status === "failed"));
+  let paused = $derived(!!job.paused);
   let runningStage = $derived(job.stages.find((s) => s.status === "running") ?? null);
 
   let overallPct = $derived.by(() => {
@@ -26,20 +28,47 @@
       default: return "·";
     }
   }
+
+  let resuming = $state(false);
+  async function resume() {
+    if (resuming) return;
+    resuming = true;
+    try {
+      await api.resumeJob(job.job_id);
+    } finally {
+      resuming = false;
+    }
+  }
 </script>
 
 <div
   class="rounded-lg border bg-ink-950/70 backdrop-blur px-3 py-2.5 transition-colors w-full
     {anyFailed
       ? 'border-red-500/40 shadow-[0_0_20px_rgba(239,68,68,0.15)]'
-      : allDone
-        ? 'border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]'
-        : 'border-accent-500/30 shadow-[0_0_24px_rgba(99,102,241,0.15)]'}"
+      : paused
+        ? 'border-amber-400/60 shadow-[0_0_24px_rgba(251,191,36,0.20)]'
+        : allDone
+          ? 'border-emerald-500/40 shadow-[0_0_20px_rgba(16,185,129,0.15)]'
+          : 'border-accent-500/30 shadow-[0_0_24px_rgba(99,102,241,0.15)]'}"
 >
   <!-- Header: overall state + percentage -->
   <div class="flex items-center justify-between mb-2 min-w-0">
     <div class="flex items-center gap-2 min-w-0">
-      {#if allDone}
+      {#if paused}
+        <button
+          type="button"
+          onclick={resume}
+          disabled={resuming}
+          title={job.pause_message || "Click to resume tagging"}
+          class="inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 bg-amber-400/15 hover:bg-amber-400/25 border border-amber-400/60 text-amber-300 text-[11px] font-medium uppercase tracking-wide flex-shrink-0 disabled:opacity-50"
+        >
+          <span class="font-mono leading-none">⏸</span>
+          <span>{resuming ? "Resuming…" : "Paused — resume"}</span>
+        </button>
+        {#if job.pause_message}
+          <span class="text-[11px] text-amber-200/80 truncate">· {job.pause_message}</span>
+        {/if}
+      {:else if allDone}
         <span class="text-emerald-400 text-sm flex-shrink-0">✓</span>
         <span class="text-[11px] uppercase tracking-wide text-emerald-400 font-medium flex-shrink-0">Pipeline complete</span>
         {#if job.summary}

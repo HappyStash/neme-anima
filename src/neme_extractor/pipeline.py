@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections import defaultdict
 from pathlib import Path
 
+import numpy as np
+from PIL import Image
 from rich.console import Console
 from rich.progress import (
     BarColumn, MofNCompleteColumn, Progress, TextColumn,
@@ -138,7 +140,6 @@ def _run_extract_inner(
     writer.write_tracklets(tracklets)
     progress.stage_done("track", message=f"{len(tracklets)} tracklet{'s' if len(tracklets)!=1 else ''}")
 
-    tagger = Tagger(thresholds.tag)
     ref_features = identifier.reference_features()
 
     progress.stage_start(
@@ -166,7 +167,6 @@ def _run_extract_inner(
             for pick in picks:
                 frame = vid.get(pick.frame_idx)
                 cropped = crop_frame(frame, pick.detection_bbox, thresholds.crop, compute_mask=False)
-                tag_res = tagger.tag(cropped.image_rgb)
                 rec = FrameRecord(
                     filename=OutputWriter.filename_for(
                         video_stem=video_stem, scene_idx=pick.scene_idx,
@@ -181,7 +181,10 @@ def _run_extract_inner(
                     sharpness=pick.sharpness, visibility=pick.visibility, aspect=pick.aspect,
                     score=pick.score, video_stem=video_stem,
                 )
-                writer.write_kept(rec, cropped.image_rgb, tag_res.text)
+                # Defer tagging — write the image with an empty .txt so the
+                # user can review/delete kept frames before paying the
+                # tagger cost on them.
+                writer.write_kept_image(rec, cropped.image_rgb)
                 kept += 1
             p.advance(task)
             progress.stage_advance("identify")
@@ -194,10 +197,65 @@ def _run_extract_inner(
         "identify",
         message=f"kept {kept} · rejected {rejected}",
     )
+
+    _run_tag_stage(
+        project=project, video_stem=video_stem, thresholds=thresholds,
+        progress=progress, pause=project.pause_before_tag,
+    )
+
     progress.finish({"kept": kept, "rejected": rejected})
 
     console.rule("[bold green]done[/bold green]")
     console.print(f"kept: {kept}  rejected: {rejected}  output: {project.kept_dir}")
+
+
+def _run_tag_stage(
+    *, project: Project, video_stem: str, thresholds: Thresholds,
+    progress: PipelineProgress, pause: bool,
+) -> None:
+    """Tag every kept frame currently on disk for ``video_stem``.
+
+    Splitting tagging out of the identify loop lets the UI pause here so the
+    user can delete unwanted frames before they get tagged. Files the user
+    deleted between identify and resume simply aren't picked up by this scan.
+    """
+    if pause:
+        progress.wait_for_resume(
+            message="Review kept frames, then resume to tag remaining",
+        )
+
+    prefix = f"{video_stem}__"
+    if not project.kept_dir.exists():
+        progress.stage_start("tag", "Tagging", total=0, message="no kept frames")
+        progress.stage_done("tag", message="0 frames")
+        return
+
+    pending = sorted(
+        p for p in project.kept_dir.iterdir()
+        if p.is_file() and p.suffix == ".png" and p.name.startswith(prefix)
+    )
+    progress.stage_start(
+        "tag", "Tagging", total=len(pending),
+        message=f"0 / {len(pending)} frames",
+    )
+    if not pending:
+        progress.stage_done("tag", message="0 frames")
+        return
+
+    tagger = Tagger(thresholds.tag)
+    with _make_progress() as p:
+        task = p.add_task("tag", total=len(pending))
+        tagged = 0
+        for png in pending:
+            with Image.open(png) as im:
+                arr = np.array(im.convert("RGB"))
+            tag_res = tagger.tag(arr)
+            png.with_suffix(".txt").write_text(tag_res.text + "\n", encoding="utf-8")
+            tagged += 1
+            p.advance(task)
+            progress.stage_advance("tag")
+            progress.stage_message("tag", f"{tagged} / {len(pending)} frames")
+    progress.stage_done("tag", message=f"{tagged} frame{'s' if tagged != 1 else ''} tagged")
 
 
 def _save_one_rejected_sample(
@@ -273,7 +331,6 @@ def _run_rerun_inner(
 
     vid = Video(Path(project.sources[source_idx].path))
     identifier = Identifier(ref_paths=[Path(p) for p in eff_refs], cfg=thresholds.identify)
-    tagger = Tagger(thresholds.tag)
     ref_features = identifier.reference_features()
 
     _wipe_outputs_for_stem(project, video_stem)
@@ -307,7 +364,6 @@ def _run_rerun_inner(
             for pick in picks:
                 frame = vid.get(pick.frame_idx)
                 cropped = crop_frame(frame, pick.detection_bbox, thresholds.crop, compute_mask=False)
-                tag_res = tagger.tag(cropped.image_rgb)
                 rec = FrameRecord(
                     filename=OutputWriter.filename_for(
                         video_stem=video_stem, scene_idx=pick.scene_idx,
@@ -322,7 +378,7 @@ def _run_rerun_inner(
                     sharpness=pick.sharpness, visibility=pick.visibility, aspect=pick.aspect,
                     score=pick.score, video_stem=video_stem,
                 )
-                writer.write_kept(rec, cropped.image_rgb, tag_res.text)
+                writer.write_kept_image(rec, cropped.image_rgb)
                 kept += 1
             p.advance(task)
             progress.stage_advance("identify")
@@ -331,5 +387,11 @@ def _run_rerun_inner(
                 f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
             )
     progress.stage_done("identify", message=f"kept {kept} · rejected {rejected}")
+
+    _run_tag_stage(
+        project=project, video_stem=video_stem, thresholds=thresholds,
+        progress=progress, pause=project.pause_before_tag,
+    )
+
     progress.finish({"kept": kept, "rejected": rejected})
     console.rule("[bold green]rerun done[/bold green]")

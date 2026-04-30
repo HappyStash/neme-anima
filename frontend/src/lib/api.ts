@@ -37,7 +37,11 @@ export const getProject = (slug: string) =>
 
 export const patchProject = (
   slug: string,
-  body: { name?: string; thresholds_overrides?: Record<string, Record<string, unknown>> },
+  body: {
+    name?: string;
+    thresholds_overrides?: Record<string, Record<string, unknown>>;
+    pause_before_tag?: boolean;
+  },
 ) => request<ProjectView>(`/api/projects/${encodeURIComponent(slug)}`, {
   method: "PATCH", body: JSON.stringify(body),
 });
@@ -179,3 +183,5 @@ export const frameImageUrl = (slug: string, filename: string) =>
 export const listQueue = () => request<QueueItem[]>("/api/queue");
 export const cancelJob = (jobId: string) =>
   request<void>(`/api/queue/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+export const resumeJob = (jobId: string) =>
+  request<void>(`/api/queue/${encodeURIComponent(jobId)}/resume`, { method: "POST" });

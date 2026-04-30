@@ -27,86 +27,98 @@ def default_state_dir() -> Path:
     return Path.home() / ".neme-extractor"
 
 
-async def _pipeline_runner(
-    job_id: str,
-    payload: dict,
-    broadcaster: Broadcaster,
-    cancel_token: asyncio.Event,
-) -> None:
-    """Run a pipeline job (extract or rerun) in a worker thread.
+def _make_pipeline_runner(
+    active_progresses: dict[str, "BroadcasterProgress"],  # noqa: F821
+):
+    """Build a JobQueue runner that knows about the per-job progress registry.
 
-    The pipeline is synchronous + GPU-bound. Run it via asyncio.to_thread so
-    the event loop stays responsive for WebSocket fan-out.
+    The closure lets the resume API endpoint find the progress reporter for a
+    running job via ``app.state.active_progresses[job_id]``.
     """
-    # Light imports first so we can publish the initial UI snapshot before
-    # paying the (potentially seconds-long) cost of loading the pipeline's
-    # heavy GPU/video deps on the first run.
-    from neme_extractor.pipeline_progress import EXTRACT_STAGES, RERUN_STAGES
-    from neme_extractor.server.job_progress import BroadcasterProgress
+    async def _pipeline_runner(
+        job_id: str,
+        payload: dict,
+        broadcaster: Broadcaster,
+        cancel_token: asyncio.Event,
+    ) -> None:
+        # Light imports first so we can publish the initial UI snapshot before
+        # paying the (potentially seconds-long) cost of loading the pipeline's
+        # heavy GPU/video deps on the first run.
+        from neme_extractor.pipeline_progress import EXTRACT_STAGES, RERUN_STAGES
+        from neme_extractor.server.job_progress import BroadcasterProgress
 
-    kind = payload["kind"]  # "extract" | "rerun"
-    project_folder = Path(payload["project_folder"])
-    project = Project.load(project_folder)
-    source_idx: int | None = None
-    if kind == "extract":
-        source_idx = int(payload["source_idx"])
-    elif kind == "rerun":
-        # Resolve the source_idx by stem so the UI can correlate to the row.
-        stem = str(payload["video_stem"])
-        source_idx = next(
-            (i for i, s in enumerate(project.sources) if Path(s.path).stem == stem),
-            None,
+        kind = payload["kind"]  # "extract" | "rerun"
+        project_folder = Path(payload["project_folder"])
+        project = Project.load(project_folder)
+        source_idx: int | None = None
+        if kind == "extract":
+            source_idx = int(payload["source_idx"])
+        elif kind == "rerun":
+            # Resolve the source_idx by stem so the UI can correlate to the row.
+            stem = str(payload["video_stem"])
+            source_idx = next(
+                (i for i, s in enumerate(project.sources) if Path(s.path).stem == stem),
+                None,
+            )
+
+        progress = BroadcasterProgress(
+            loop=asyncio.get_running_loop(),
+            broadcaster=broadcaster,
+            job_id=job_id,
+            project_slug=project.slug,
+            source_idx=source_idx,
+            kind=kind,
+            stages=EXTRACT_STAGES if kind == "extract" else RERUN_STAGES,
+        )
+        progress.publish_initial()
+        active_progresses[job_id] = progress
+        logger.info(
+            "pipeline.start job=%s kind=%s project=%s source_idx=%s",
+            job_id, kind, project.slug, source_idx,
         )
 
-    progress = BroadcasterProgress(
-        loop=asyncio.get_running_loop(),
-        broadcaster=broadcaster,
-        job_id=job_id,
-        project_slug=project.slug,
-        source_idx=source_idx,
-        kind=kind,
-        stages=EXTRACT_STAGES if kind == "extract" else RERUN_STAGES,
-    )
-    progress.publish_initial()
-    logger.info(
-        "pipeline.start job=%s kind=%s project=%s source_idx=%s",
-        job_id, kind, project.slug, source_idx,
-    )
+        # Heavy imports happen here; the UI already has its skeleton.
+        from neme_extractor.pipeline import run_extract, run_rerun
 
-    # Heavy imports happen here; the UI already has its skeleton.
-    from neme_extractor.pipeline import run_extract, run_rerun
+        def _do_work() -> None:
+            try:
+                if kind == "extract":
+                    run_extract(
+                        project=project, source_idx=int(payload["source_idx"]),
+                        progress=progress,
+                    )
+                elif kind == "rerun":
+                    run_rerun(
+                        project=project, video_stem=str(payload["video_stem"]),
+                        progress=progress,
+                    )
+                else:
+                    raise ValueError(f"unknown job kind: {kind!r}")
+            except Exception:
+                # Surface the full traceback to the server log; the progress
+                # reporter has already been told about the failure by
+                # run_extract / run_rerun and will mark the right stage red.
+                logger.error(
+                    "pipeline.crashed job=%s kind=%s\n%s",
+                    job_id, kind, traceback.format_exc(),
+                )
+                raise
 
-    def _do_work() -> None:
         try:
-            if kind == "extract":
-                run_extract(
-                    project=project, source_idx=int(payload["source_idx"]),
-                    progress=progress,
-                )
-            elif kind == "rerun":
-                run_rerun(
-                    project=project, video_stem=str(payload["video_stem"]),
-                    progress=progress,
-                )
-            else:
-                raise ValueError(f"unknown job kind: {kind!r}")
-        except Exception:
-            # Surface the full traceback to the server log; the progress
-            # reporter has already been told about the failure by run_extract /
-            # run_rerun and will mark the right stage red on the UI.
-            logger.error(
-                "pipeline.crashed job=%s kind=%s\n%s",
-                job_id, kind, traceback.format_exc(),
-            )
-            raise
+            await asyncio.to_thread(_do_work)
+        finally:
+            # Always release the paused waiter so a job that failed mid-pause
+            # can't wedge the queue, and drop the registry entry.
+            progress.resume()
+            active_progresses.pop(job_id, None)
 
-    await asyncio.to_thread(_do_work)
+        logger.info("pipeline.done job=%s kind=%s", job_id, kind)
+        await broadcaster.publish(Event(
+            type="job.done",
+            payload={"job_id": job_id, "project": project.slug, "source_idx": source_idx},
+        ))
 
-    logger.info("pipeline.done job=%s kind=%s", job_id, kind)
-    await broadcaster.publish(Event(
-        type="job.done",
-        payload={"job_id": job_id, "project": project.slug, "source_idx": source_idx},
-    ))
+    return _pipeline_runner
 
 
 def create_app(*, state_dir: Path | None = None) -> FastAPI:
@@ -115,7 +127,10 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
 
     registry = ProjectRegistry(state_dir / "db.sqlite")
     broadcaster = Broadcaster()
-    queue = JobQueue(runner=_pipeline_runner, broadcaster=broadcaster)
+    active_progresses: dict[str, "BroadcasterProgress"] = {}  # noqa: F821
+    queue = JobQueue(
+        runner=_make_pipeline_runner(active_progresses), broadcaster=broadcaster,
+    )
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -130,6 +145,7 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     app.state.broadcaster = broadcaster
     app.state.queue = queue
     app.state.state_dir = state_dir
+    app.state.active_progresses = active_progresses
 
     @app.get("/api/health")
     async def health() -> dict:

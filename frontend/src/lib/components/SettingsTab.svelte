@@ -73,12 +73,22 @@
   let saving = $state(false);
   let savedAt = $state<number | null>(null);
 
+  let pauseBeforeTag = $state<boolean>(
+    projectsStore.active?.pause_before_tag ?? true,
+  );
+  $effect(() => {
+    pauseBeforeTag = projectsStore.active?.pause_before_tag ?? true;
+  });
+
   async function save() {
     const slug = projectsStore.active?.slug;
     if (!slug) return;
     saving = true;
     try {
-      await api.patchProject(slug, { thresholds_overrides: overrides });
+      await api.patchProject(slug, {
+        thresholds_overrides: overrides,
+        pause_before_tag: pauseBeforeTag,
+      });
       await projectsStore.load(slug);
       savedAt = Date.now();
     } finally {
@@ -100,12 +110,12 @@
 
 <div class="mt-4 max-w-3xl mx-auto">
   <div class="flex items-center justify-between mb-4">
-    <h2 class="text-base font-semibold text-slate-200">Per-project thresholds</h2>
+    <h2 class="text-base font-semibold text-slate-200">Per-project settings</h2>
     <div class="flex gap-2 items-center">
       {#if savedAt}
         <span class="text-xs text-emerald-400">saved</span>
       {/if}
-      <button type="button" onclick={resetAll} class="text-xs text-slate-500 hover:text-slate-300">Reset all</button>
+      <button type="button" onclick={resetAll} class="text-xs text-slate-500 hover:text-slate-300">Reset thresholds</button>
       <button
         type="button"
         onclick={save}
@@ -113,6 +123,26 @@
         class="px-4 py-1.5 text-xs rounded gradient-accent text-white disabled:opacity-50"
       >{saving ? "Saving…" : "Save"}</button>
     </div>
+  </div>
+
+  <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+    <h3 class="text-sm font-medium text-slate-200 mb-3">Workflow</h3>
+    <label class="flex items-start gap-3 cursor-pointer">
+      <input
+        type="checkbox"
+        bind:checked={pauseBeforeTag}
+        class="mt-0.5 w-4 h-4 rounded bg-ink-950 border-ink-700 accent-accent-500"
+      />
+      <span class="flex-1">
+        <span class="block text-sm text-slate-200">Pause before tagging</span>
+        <span class="block text-xs text-slate-500 mt-0.5">
+          When on, the pipeline waits after writing kept frames so you can
+          delete unwanted ones before they're tagged. Click the yellow
+          ⏸ pill on a running pipeline to resume tagging. Off = the
+          pipeline tags inline as it runs.
+        </span>
+      </span>
+    </label>
   </div>
 
   {#each SECTIONS as section (section.key)}

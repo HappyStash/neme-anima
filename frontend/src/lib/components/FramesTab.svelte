@@ -3,6 +3,9 @@
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
   import FrameThumb from "./FrameThumb.svelte";
+  import FullSizeModal from "./FullSizeModal.svelte";
+
+  let fullsize = $state<string | null>(null);
 
   $effect(() => {
     const slug = projectsStore.active?.slug;
@@ -41,8 +44,13 @@
           frame={f}
           selected={(framesStore.selectionVersion, framesStore.selection.has(f.filename))}
           onclick={(ev) => handleClick(i, ev)}
+          onexpand={() => (fullsize = f.filename)}
         />
       {/each}
     </div>
   {/if}
 </div>
+
+{#if fullsize}
+  <FullSizeModal filename={fullsize} onclose={() => (fullsize = null)} />
+{/if}

@@ -69,6 +69,11 @@ class Project:
     refs: list[RefImage] = field(default_factory=list)
     thresholds_overrides: dict = field(default_factory=dict)
     source_root: str | None = None
+    # When True, extract/rerun pipelines pause after writing kept frames to
+    # disk and wait for an explicit resume signal before tagging — giving the
+    # user a chance to delete unwanted frames so they don't pay the tagging
+    # cost on them. False = tag inline like the original pipeline.
+    pause_before_tag: bool = True
 
     # ---------------- factory methods ----------------
 
@@ -107,6 +112,7 @@ class Project:
             refs=[RefImage(**r) for r in data.get("refs", [])],
             thresholds_overrides=data.get("thresholds_overrides", {}),
             source_root=data.get("source_root"),
+            pause_before_tag=bool(data.get("pause_before_tag", True)),
         )
 
     def save(self) -> None:
@@ -118,6 +124,7 @@ class Project:
             "refs": [asdict(r) for r in self.refs],
             "thresholds_overrides": self.thresholds_overrides,
             "source_root": self.source_root,
+            "pause_before_tag": self.pause_before_tag,
         }
         tmp = self.root / "project.json.tmp"
         tmp.write_text(json.dumps(out, indent=2))

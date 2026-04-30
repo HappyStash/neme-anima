@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from neme_extractor.storage.metadata import MetadataLog
+from neme_extractor.storage.metadata import FrameRecord, MetadataLog
 from neme_extractor.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["frames"])
@@ -58,9 +58,23 @@ async def list_frames(
 ) -> dict:
     project = _load(request, slug)
     log = MetadataLog(project.metadata_path)
-    items = []
+
+    # The metadata log is append-only — a delete or rerun leaves orphan rows
+    # behind. We dedupe by filename (keep the most recent record) and filter
+    # to entries whose image still exists on disk so the UI never shows a
+    # row with a broken thumbnail.
+    by_filename: dict[str, FrameRecord] = {}
     for rec in log.iter_records(video_stem=source):
         if kept_only and not rec.kept:
+            continue
+        by_filename[rec.filename] = rec
+
+    kept_dir = project.kept_dir
+    rejected_dir = project.rejected_dir
+    items = []
+    for rec in by_filename.values():
+        on_disk = kept_dir / f"{rec.filename}.png" if rec.kept else rejected_dir / f"{rec.filename}.png"
+        if not on_disk.is_file():
             continue
         items.append({
             "filename": rec.filename,

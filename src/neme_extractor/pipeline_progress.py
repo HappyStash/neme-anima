@@ -31,6 +31,12 @@ class PipelineProgress:
     def finish(self, summary: dict | None = None) -> None:
         ...
 
+    def wait_for_resume(self, *, message: str = "") -> None:
+        """Block the runner thread until something calls resume(). Default is
+        a no-op so non-server callers (CLI, tests) never pause.
+        """
+        ...
+
 
 NULL_PROGRESS: PipelineProgress = PipelineProgress()
 
@@ -43,9 +49,11 @@ EXTRACT_STAGES: list[tuple[str, str]] = [
     ("detect", "Person detection"),
     ("track", "Tracking"),
     ("identify", "Identify · select · save"),
+    ("tag", "Tagging"),
 ]
 
 RERUN_STAGES: list[tuple[str, str]] = [
     ("setup", "Setup"),
     ("identify", "Identify · select · save"),
+    ("tag", "Tagging"),
 ]

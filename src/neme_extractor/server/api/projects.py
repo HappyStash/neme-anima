@@ -26,6 +26,7 @@ class RegisterBody(BaseModel):
 class PatchProjectBody(BaseModel):
     name: str | None = None
     thresholds_overrides: dict | None = None
+    pause_before_tag: bool | None = None
 
 
 class DeleteProjectBody(BaseModel):
@@ -52,6 +53,7 @@ def _project_view(project: Project) -> dict:
         "refs": [asdict(r) for r in project.refs],
         "thresholds_overrides": project.thresholds_overrides,
         "source_root": project.source_root,
+        "pause_before_tag": project.pause_before_tag,
     }
 
 
@@ -151,6 +153,8 @@ async def patch_project(request: Request, slug: str, body: PatchProjectBody) -> 
         project.name = body.name
     if body.thresholds_overrides is not None:
         project.thresholds_overrides = body.thresholds_overrides
+    if body.pause_before_tag is not None:
+        project.pause_before_tag = body.pause_before_tag
     project.save()
     request.app.state.registry.register(project)  # refresh name
     return _project_view(project)

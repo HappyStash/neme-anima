@@ -23,3 +23,19 @@ async def cancel(request: Request, job_id: str) -> Response:
     if not ok:
         raise HTTPException(status_code=404, detail=f"unknown job_id: {job_id}")
     return Response(status_code=204)
+
+
+@router.post("/{job_id}/resume", status_code=204)
+async def resume(request: Request, job_id: str) -> Response:
+    """Release a job that's parked at ``progress.wait_for_resume()``."""
+    progresses = request.app.state.active_progresses
+    progress = progresses.get(job_id)
+    if progress is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"no running job with id {job_id} (already finished?)",
+        )
+    if not progress.is_paused:
+        raise HTTPException(status_code=409, detail="job is not paused")
+    progress.resume()
+    return Response(status_code=204)

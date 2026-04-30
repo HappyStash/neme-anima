@@ -50,6 +50,17 @@ class OutputWriter:
         self._metadata.append(record)
         return path
 
+    def write_kept_image(self, record: FrameRecord, image_rgb: np.ndarray) -> Path:
+        """Like ``write_kept`` but writes an empty ``.txt`` next to the image —
+        used when tagging is deferred to a later pipeline stage so the user
+        can review and delete frames before paying the tagger cost.
+        """
+        path = self.project.kept_dir / f"{record.filename}.png"
+        Image.fromarray(image_rgb).save(path)
+        path.with_suffix(".txt").write_text("\n", encoding="utf-8")
+        self._metadata.append(record)
+        return path
+
     def write_rejected(self, record: FrameRecord, image_rgb: np.ndarray) -> Path:
         path = self.project.rejected_dir / f"{record.filename}.png"
         Image.fromarray(image_rgb).save(path)

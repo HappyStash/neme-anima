@@ -58,6 +58,12 @@ class BroadcasterProgress(PipelineProgress):
         self._summary: dict[str, Any] | None = None
         self._last_publish: float = 0.0
         self._published_done: bool = False
+        # Pause/resume — used by the pipeline to wait for a user action (e.g.
+        # reviewing kept frames before tagging). Set from the asyncio side
+        # via ``resume()``.
+        self._pause_event = threading.Event()
+        self._paused: bool = False
+        self._pause_message: str = ""
 
     # ----------- PipelineProgress callbacks (called from worker thread) -----
 
@@ -150,7 +156,35 @@ class BroadcasterProgress(PipelineProgress):
             "kind": self._kind,
             "stages": [self._stages[k].copy() for k in self._stage_order],
             "summary": dict(self._summary) if self._summary is not None else None,
+            "paused": self._paused,
+            "pause_message": self._pause_message,
         }
+
+    # ----------- pause / resume -------------------------------------------
+
+    def wait_for_resume(self, *, message: str = "") -> None:
+        """Called from the worker thread. Marks the job as paused, publishes
+        an immediate update so the UI flips to the pause indicator, then
+        blocks until ``resume()`` is called from the asyncio side.
+        """
+        with self._lock:
+            self._paused = True
+            self._pause_message = message
+            self._pause_event.clear()
+        self._publish(force=True)
+        self._pause_event.wait()
+        with self._lock:
+            self._paused = False
+            self._pause_message = ""
+        self._publish(force=True)
+
+    def resume(self) -> None:
+        """Called from the asyncio side (API handler) to release a paused job."""
+        self._pause_event.set()
+
+    @property
+    def is_paused(self) -> bool:
+        return self._paused
 
     def _publish(self, *, force: bool) -> None:
         now = time.monotonic()
