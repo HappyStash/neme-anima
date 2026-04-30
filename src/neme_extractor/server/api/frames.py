@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import io
+import json
 import re
 import secrets
 from pathlib import Path
@@ -190,6 +191,28 @@ async def put_description(
     return {"text": body.text}
 
 
+def _cleanup_crop_artifacts(project: Project, filename: str) -> None:
+    """Remove crop-related siblings for a frame being deleted.
+
+    Two cases:
+      * Original deleted → drop its derivative png/txt and the .crop.json
+        sidecar so the next time a same-named frame is added it starts fresh.
+      * Derivative deleted → drop the parent's .crop.json sidecar so the
+        next "open original" doesn't show a phantom rectangle for a crop
+        whose result has been thrown away.
+    """
+    if filename.endswith(CROP_SUFFIX):
+        parent = filename[: -len(CROP_SUFFIX)]
+        spec = project.kept_dir / f"{parent}.crop.json"
+        if spec.is_file():
+            spec.unlink()
+        return
+    deriv_png, deriv_txt, spec = _crop_paths(project, filename)
+    for p in (deriv_png, deriv_txt, spec):
+        if p.is_file():
+            p.unlink()
+
+
 @router.delete("/{slug}/frames/{filename}", status_code=204)
 async def delete_frame(request: Request, slug: str, filename: str) -> Response:
     project = _load(request, slug)
@@ -198,6 +221,7 @@ async def delete_frame(request: Request, slug: str, filename: str) -> Response:
         png.unlink()
     if txt.exists():
         txt.unlink()
+    _cleanup_crop_artifacts(project, filename)
     return Response(status_code=204)
 
 
@@ -211,6 +235,7 @@ async def bulk_delete(request: Request, slug: str, body: BulkDeleteBody) -> dict
             png.unlink(); deleted += 1
         if txt.exists():
             txt.unlink()
+        _cleanup_crop_artifacts(project, filename)
     return {"deleted": deleted}
 
 
@@ -356,21 +381,65 @@ def _find_record(project: Project, filename: str) -> FrameRecord | None:
     return found
 
 
-def _next_crop_filename(project: Project, base: str) -> str:
-    """Generate ``<base>_crop<n>`` not colliding with anything on disk."""
-    n = 1
-    while (project.kept_dir / f"{base}_crop{n}.png").exists():
-        n += 1
-        if n > 9999:
-            raise RuntimeError(f"too many crops of {base!r}")
-    return f"{base}_crop{n}"
+# Each original gets at most one crop derivative; re-cropping overwrites it.
+# The fixed suffix (no numeric counter) is what makes the round-trip work —
+# without it we'd accumulate _crop1/_crop2/... and have no way to find
+# "the" derivative when re-opening the original.
+CROP_SUFFIX = "_crop"
+
+
+def _crop_paths(project: Project, original_filename: str) -> tuple[Path, Path, Path]:
+    """Return ``(derivative_png, derivative_txt, crop_spec_json)`` paths.
+
+    The spec sidecar lives next to the *original* (not the derivative) so the
+    "load the existing rect when reopening the original" lookup is a single
+    file existence check. Naming it with a dot prefix to ``crop`` keeps it
+    clearly separate from any tag .txt sidecar.
+    """
+    crop_base = f"{original_filename}{CROP_SUFFIX}"
+    return (
+        project.kept_dir / f"{crop_base}.png",
+        project.kept_dir / f"{crop_base}.txt",
+        project.kept_dir / f"{original_filename}.crop.json",
+    )
+
+
+@router.get("/{slug}/frames/{filename}/crop")
+async def get_crop_rect(request: Request, slug: str, filename: str) -> dict:
+    """Return the saved crop rectangle for ``filename`` if one exists.
+
+    404 when no crop has been confirmed for this frame yet — the modal uses
+    that as the "no overlay, start full-image" signal.
+    """
+    project = _load(request, slug)
+    _, _, spec = _crop_paths(project, filename)
+    if not spec.is_file():
+        raise HTTPException(status_code=404, detail="no saved crop")
+    try:
+        data = json.loads(spec.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        raise HTTPException(status_code=500, detail=f"corrupt crop spec: {exc}")
+    # Only echo the four fields the client cares about; ignores anything
+    # extra we may add later for forwards compat.
+    return {
+        "x": int(data.get("x", 0)),
+        "y": int(data.get("y", 0)),
+        "width": int(data.get("width", 0)),
+        "height": int(data.get("height", 0)),
+    }
 
 
 @router.post("/{slug}/frames/{filename}/crop")
 async def crop_frame_endpoint(
     request: Request, slug: str, filename: str, body: CropBody,
 ) -> dict:
-    """Save a cropped derivative as a NEW frame; the original is preserved."""
+    """Save (or overwrite) the cropped derivative for an original frame.
+
+    Behavior: the original is never touched. The derivative lives at a fixed
+    ``<filename>_crop`` filename — re-cropping overwrites it. A
+    ``<filename>.crop.json`` sidecar records the rectangle so the modal can
+    repaint the overlay when the original is reopened.
+    """
     from PIL import Image
 
     project = _load(request, slug)
@@ -382,6 +451,9 @@ async def crop_frame_endpoint(
     if original is None:
         raise HTTPException(status_code=404, detail="frame metadata not found")
 
+    out_png, out_txt, spec_path = _crop_paths(project, filename)
+    crop_base = out_png.stem
+
     with Image.open(src_png) as im:
         im_w, im_h = im.size
         x = max(0, min(int(body.x), im_w))
@@ -389,20 +461,23 @@ async def crop_frame_endpoint(
         w = max(1, min(int(body.width), im_w - x))
         h = max(1, min(int(body.height), im_h - y))
         cropped = im.crop((x, y, x + w, y + h))
-        new_base = _next_crop_filename(project, filename)
-        out_png = project.kept_dir / f"{new_base}.png"
-        cropped.save(out_png)
+        cropped.save(out_png)  # overwrites prior derivative if present
 
     # Carry the original's tags forward; the crop usually keeps roughly the
-    # same subject and the user can re-edit / re-tag on demand.
-    out_txt = project.kept_dir / f"{new_base}.txt"
+    # same subject and the user can re-edit / re-tag on demand. Always
+    # rewrite so a re-crop refreshes the sidecar to match the latest tags.
     if src_txt.exists():
         out_txt.write_bytes(src_txt.read_bytes())
     else:
         out_txt.write_text("\n", encoding="utf-8")
 
+    spec_path.write_text(
+        json.dumps({"x": x, "y": y, "width": w, "height": h}),
+        encoding="utf-8",
+    )
+
     new_rec = FrameRecord(
-        filename=new_base,
+        filename=crop_base,
         kept=True,
         scene_idx=original.scene_idx,
         tracklet_id=original.tracklet_id,
@@ -416,6 +491,9 @@ async def crop_frame_endpoint(
         score=original.score,
         video_stem=original.video_stem,
     )
+    # The metadata log is append-only; list_frames dedupes by filename and
+    # keeps the latest record, so a re-crop "replaces" the visible bbox
+    # without us having to rewrite the log.
     MetadataLog(project.metadata_path).append(new_rec)
     return _record_to_dict(new_rec)
 

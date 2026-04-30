@@ -66,7 +66,7 @@
     onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
-    <h2 class="text-lg font-semibold mb-1">Edit LLM description</h2>
+    <h2 class="text-lg font-semibold mb-1">Edit description</h2>
     <p class="text-xs text-slate-500 mb-4 truncate" title={filename}>
       {filename}
     </p>

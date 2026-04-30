@@ -217,6 +217,21 @@ export const cropFrame = (
   { method: "POST", body: JSON.stringify(rect) },
 );
 
+/** Returns the saved crop rectangle for a frame, or null if none has been
+ *  confirmed yet (server returns 404). */
+export const getCropRect = async (
+  slug: string, filename: string,
+): Promise<{ x: number; y: number; width: number; height: number } | null> => {
+  try {
+    return await request(
+      `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/crop`,
+    );
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 404) return null;
+    throw e;
+  }
+};
+
 export const uploadFrames = async (slug: string, files: File[]) => {
   const fd = new FormData();
   for (const f of files) fd.append("files", f, f.name);

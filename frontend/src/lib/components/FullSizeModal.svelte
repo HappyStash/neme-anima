@@ -39,14 +39,26 @@
   let imgEl: HTMLImageElement | undefined = $state();
   let viewportEl: HTMLDivElement | undefined = $state();
 
-  // Crop rect in IMAGE pixel space (not display). Resets to full-image on every
-  // image load, which also resets the "modified" flag.
+  // Crop rect in IMAGE pixel space (not display). On modal open we look up
+  // any persisted crop sidecar via /frames/{filename}/crop — if one exists
+  // the rect starts at the saved values, otherwise full-image.
   let cropX = $state(0);
   let cropY = $state(0);
   let cropW = $state(0);
   let cropH = $state(0);
+  // The "as last saved" rectangle — used both to initialize the overlay and
+  // as the reference `modified` compares against. null = no saved crop yet.
+  let savedRect = $state<{ x: number; y: number; width: number; height: number } | null>(null);
+  // Snapshot of the rect at the moment we apply (saved or full-image), so
+  // `modified` flips to true only when the user actually moves something.
+  let initialX = $state(0);
+  let initialY = $state(0);
   let initialW = $state(0);
   let initialH = $state(0);
+  // Track which filename the load belongs to so a slow request that arrives
+  // after the user navigated away doesn't clobber the new image's state.
+  let savedRectFor = $state<string>("");
+  let imageLoadedFor = $state<string>("");
   let modified = $state(false);
   let saving = $state(false);
 
@@ -57,13 +69,27 @@
   let displayW = $derived(natW * scale);
   let displayH = $derived(natH * scale);
 
-  function resetCropToFull() {
-    cropX = 0;
-    cropY = 0;
-    cropW = natW;
-    cropH = natH;
-    initialW = natW;
-    initialH = natH;
+  function applyRect() {
+    // Need both pieces (image dimensions AND saved-rect lookup) to have
+    // landed for the SAME filename before we paint. Either side arriving
+    // first just waits.
+    if (imageLoadedFor !== filename || savedRectFor !== filename) return;
+    if (!natW || !natH) return;
+    if (savedRect) {
+      cropX = savedRect.x;
+      cropY = savedRect.y;
+      cropW = savedRect.width;
+      cropH = savedRect.height;
+    } else {
+      cropX = 0;
+      cropY = 0;
+      cropW = natW;
+      cropH = natH;
+    }
+    initialX = cropX;
+    initialY = cropY;
+    initialW = cropW;
+    initialH = cropH;
     modified = false;
   }
 
@@ -71,19 +97,49 @@
     if (!imgEl) return;
     natW = imgEl.naturalWidth;
     natH = imgEl.naturalHeight;
-    resetCropToFull();
+    imageLoadedFor = filename;
+    applyRect();
+  }
+
+  async function loadSavedRect(forFilename: string) {
+    const slug = projectsStore.active?.slug;
+    if (!slug || !forFilename) {
+      savedRect = null;
+      savedRectFor = forFilename;
+      applyRect();
+      return;
+    }
+    try {
+      const r = await api.getCropRect(slug, forFilename);
+      // Drop the response if the user already navigated away — otherwise we'd
+      // paint stale state for a different image.
+      if (forFilename !== filename) return;
+      savedRect = r;
+    } catch (e) {
+      if (forFilename !== filename) return;
+      savedRect = null;
+      console.warn("crop rect lookup failed", e);
+    }
+    savedRectFor = forFilename;
+    applyRect();
   }
 
   // Reset rect any time the displayed filename changes (arrow-key nav).
+  // Kicks off the saved-rect lookup; the image's onload completes the
+  // other half of `applyRect()`.
   $effect(() => {
-    void filename;
+    const fn = filename;
     natW = 0;
     natH = 0;
     cropX = 0;
     cropY = 0;
     cropW = 0;
     cropH = 0;
+    savedRect = null;
+    savedRectFor = "";
+    imageLoadedFor = "";
     modified = false;
+    void loadSavedRect(fn);
   });
 
   function measureViewport() {
@@ -177,7 +233,13 @@
     cropY = Math.round(y);
     cropW = Math.round(w);
     cropH = Math.round(h);
-    if (cropW !== initialW || cropH !== initialH || cropX !== 0 || cropY !== 0) {
+    // Compare against the initial rect — which is the saved crop (if any)
+    // or the full-image rect — so reopening an already-cropped frame doesn't
+    // immediately appear "modified" just because cropX/Y aren't zero.
+    if (
+      cropX !== initialX || cropY !== initialY ||
+      cropW !== initialW || cropH !== initialH
+    ) {
       modified = true;
     }
   }

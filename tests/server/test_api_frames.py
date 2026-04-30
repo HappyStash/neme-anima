@@ -290,18 +290,18 @@ async def test_crop_creates_derivative_keeps_original(
     )
     assert resp.status_code == 200
     body = resp.json()
-    assert body["filename"] == f"{name}_crop1"
+    assert body["filename"] == f"{name}_crop"
     assert body["video_stem"] == "ep01"
 
     # Original still on disk.
     assert (project_with_frames.kept_dir / f"{name}.png").exists()
     # New cropped derivative on disk with the right size.
-    new_png = project_with_frames.kept_dir / f"{name}_crop1.png"
+    new_png = project_with_frames.kept_dir / f"{name}_crop.png"
     assert new_png.exists()
     with Image.open(new_png) as im:
         assert im.size == (80, 60)
     # Tags carried over from the original.
-    new_txt = project_with_frames.kept_dir / f"{name}_crop1.txt"
+    new_txt = project_with_frames.kept_dir / f"{name}_crop.txt"
     assert "1girl" in new_txt.read_text(encoding="utf-8")
 
 
@@ -316,7 +316,7 @@ async def test_crop_clamps_oob_rectangle(
         json={"x": 90, "y": 90, "width": 999, "height": 999},
     )
     assert resp.status_code == 200
-    new_png = project_with_frames.kept_dir / f"{name}_crop1.png"
+    new_png = project_with_frames.kept_dir / f"{name}_crop.png"
     with Image.open(new_png) as im:
         # Clamped to the bottom-right 10×10 corner.
         assert im.size == (10, 10)
@@ -330,3 +330,109 @@ async def test_crop_404_for_unknown_frame(
         json={"x": 0, "y": 0, "width": 10, "height": 10},
     )
     assert resp.status_code == 404
+
+
+async def test_crop_overwrites_previous_derivative(
+    client, project_with_frames: Project,
+) -> None:
+    """Re-cropping the same original must overwrite the derivative (single
+    crop per original) and update the .crop.json sidecar — otherwise the
+    user would accumulate _crop1/_crop2/... and lose the round-trip."""
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    url = f"/api/projects/{project_with_frames.slug}/frames/{name}/crop"
+
+    r1 = await client.post(url, json={"x": 0, "y": 0, "width": 50, "height": 50})
+    assert r1.status_code == 200
+    r2 = await client.post(url, json={"x": 10, "y": 20, "width": 80, "height": 60})
+    assert r2.status_code == 200
+
+    # Same filename for both responses — we never produce _crop2.
+    assert r1.json()["filename"] == r2.json()["filename"] == f"{name}_crop"
+    # Derivative reflects the LATEST crop dimensions.
+    new_png = project_with_frames.kept_dir / f"{name}_crop.png"
+    with Image.open(new_png) as im:
+        assert im.size == (80, 60)
+    # Sidecar reflects the latest rect.
+    spec = project_with_frames.kept_dir / f"{name}.crop.json"
+    import json as _json
+    assert _json.loads(spec.read_text()) == {
+        "x": 10, "y": 20, "width": 80, "height": 60,
+    }
+
+
+async def test_get_crop_rect_returns_saved_rectangle(
+    client, project_with_frames: Project,
+) -> None:
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 10, "y": 20, "width": 80, "height": 60},
+    )
+    resp = await client.get(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop"
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"x": 10, "y": 20, "width": 80, "height": 60}
+
+
+async def test_get_crop_rect_404_when_no_crop(
+    client, project_with_frames: Project,
+) -> None:
+    """The modal uses the 404 as the "no overlay, start full-image" signal."""
+    name = "ep01__s000_t001_f000010"
+    resp = await client.get(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop"
+    )
+    assert resp.status_code == 404
+
+
+async def test_deleting_original_also_clears_crop_artifacts(
+    client, project_with_frames: Project,
+) -> None:
+    """Otherwise an orphaned sidecar would attach itself to the next frame
+    that happens to be added with the same filename."""
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 10, "y": 20, "width": 80, "height": 60},
+    )
+    deriv = project_with_frames.kept_dir / f"{name}_crop.png"
+    spec = project_with_frames.kept_dir / f"{name}.crop.json"
+    assert deriv.exists() and spec.exists()
+
+    resp = await client.delete(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}"
+    )
+    assert resp.status_code == 204
+    assert not deriv.exists()
+    assert not spec.exists()
+
+
+async def test_deleting_derivative_clears_only_sidecar(
+    client, project_with_frames: Project,
+) -> None:
+    """Deleting just the derivative must remove the saved rect (so reopening
+    the original starts clean) but leave the original alone."""
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 10, "y": 20, "width": 80, "height": 60},
+    )
+    spec = project_with_frames.kept_dir / f"{name}.crop.json"
+    assert spec.exists()
+
+    resp = await client.delete(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}_crop"
+    )
+    assert resp.status_code == 204
+    assert not spec.exists()
+    # Original untouched.
+    assert (project_with_frames.kept_dir / f"{name}.png").exists()

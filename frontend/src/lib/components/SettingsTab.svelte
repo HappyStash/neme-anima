@@ -2,6 +2,17 @@
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
 
+  // Mirror of llm.DEFAULT_PROMPT in the backend. Kept here so the textarea
+  // can pre-fill with the actual prompt instead of an empty placeholder —
+  // the user wanted to be able to edit it as a starting point. Keep these
+  // two strings in sync; the backend treats an empty saved prompt as
+  // "use default" so the constant only matters for the editing UX.
+  const DEFAULT_LLM_PROMPT =
+    "Describe this image in 1-2 sentences for a LoRA training caption. " +
+    "Focus on the subject's pose, clothing, expression, background, lighting, " +
+    "and any distinctive details. Be concise, factual, and avoid speculating " +
+    "about names, intent, or off-camera context.";
+
   // The threshold sections we expose. Pulled from src/neme_extractor/config.py.
   const SECTIONS: {
     key: string;
@@ -89,7 +100,12 @@
     projectsStore.active?.llm?.endpoint || "http://localhost:1234",
   );
   let llmModel = $state<string>(projectsStore.active?.llm?.model ?? "");
-  let llmPrompt = $state<string>(projectsStore.active?.llm?.prompt ?? "");
+  // If the project hasn't customized the prompt, surface the default so the
+  // user has something to edit rather than a blank textarea — they can save
+  // it verbatim or customize.
+  let llmPrompt = $state<string>(
+    projectsStore.active?.llm?.prompt || DEFAULT_LLM_PROMPT,
+  );
   let llmModelsAvailable = $state<string[]>(
     projectsStore.active?.llm?.model ? [projectsStore.active.llm.model] : [],
   );
@@ -103,7 +119,9 @@
     llmEnabled = llm.enabled;
     llmEndpoint = llm.endpoint || "http://localhost:1234";
     llmModel = llm.model || "";
-    llmPrompt = llm.prompt || "";
+    // Empty saved prompt = "use the default", so show the default text in
+    // the editor instead of a blank box; non-empty = user-customized.
+    llmPrompt = llm.prompt || DEFAULT_LLM_PROMPT;
     if (llm.model && !llmModelsAvailable.includes(llm.model)) {
       llmModelsAvailable = [llm.model];
     }
@@ -152,7 +170,10 @@
           enabled: llmEnabled && !!llmModel.trim(),
           endpoint: llmEndpoint.trim(),
           model: llmModel.trim(),
-          prompt: llmPrompt,
+          // Save empty when the user hasn't customized — that lets future
+          // upstream changes to DEFAULT_PROMPT take effect automatically
+          // for projects that never edited the prompt.
+          prompt: llmPrompt === DEFAULT_LLM_PROMPT ? "" : llmPrompt,
         },
       });
       await projectsStore.load(slug);
@@ -296,10 +317,13 @@
       </span>
       <textarea
         bind:value={llmPrompt}
-        rows="3"
-        placeholder="Leave blank to use the built-in LoRA caption prompt."
+        rows="4"
         class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-xs font-mono focus:outline-none focus:border-accent-500 resize-y"
       ></textarea>
+      <span class="block text-[10px] text-slate-600 mt-1">
+        Pre-filled with the built-in LoRA caption prompt — edit to customize,
+        or save as-is to track upstream changes to the default.
+      </span>
     </label>
   </div>
 

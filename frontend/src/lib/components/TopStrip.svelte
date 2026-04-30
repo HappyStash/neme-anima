@@ -14,9 +14,9 @@
     <div class="w-5 h-5 rounded-full gradient-accent shadow-[0_0_12px_rgba(129,140,248,0.4)] flex-shrink-0"></div>
     <ProjectPills {onopenCreate} />
     <div class="flex-1"></div>
+    <ActionBar {onopenRegex} />
     <ViewTabs />
     <DensitySlider />
-    <ActionBar {onopenRegex} />
     <QueuePill />
   </div>
 </header>
