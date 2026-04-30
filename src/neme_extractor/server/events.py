@@ -18,11 +18,13 @@ class Event:
     """One server-pushed event over the WebSocket channel.
 
     `type` is one of:
-      - "queue.update"  payload: { queue: [...] }                — queue contents changed
-      - "job.progress"  payload: { job_id, project, pct, stage } — extraction progress
-      - "job.frame"     payload: { job_id, filename, kept }      — a new frame was written
-      - "job.log"       payload: { job_id, level, line }         — log line emitted by the worker
-      - "job.done"      payload: { job_id, kept, rejected }      — job finished
+      - "queue.update"     payload: { queue: [...] }                — queue contents changed
+      - "job.progress"     payload: { job_id, project, pct, stage } — extraction progress
+      - "job.frame"        payload: { job_id, filename, kept }      — a new frame was written
+      - "job.log"          payload: { job_id, level, line }         — log line emitted by the worker
+      - "job.done"         payload: { job_id, kept, rejected }      — job finished
+      - "training.status"  payload: { slug, running, state }        — training run state changed
+      - "training.log"     payload: { slug, stream, line, t }       — one trainer log line
     """
     type: str
     payload: dict[str, Any] = field(default_factory=dict)

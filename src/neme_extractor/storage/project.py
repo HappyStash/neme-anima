@@ -14,7 +14,7 @@ Layout under the project root:
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -77,6 +77,69 @@ class LLMConfig:
 
 
 @dataclass
+class TrainingConfig:
+    """Anima LoRA-training settings, persisted alongside the project.
+
+    Defaults match the official tdrussell style-LoRA recipe (see
+    docs/anima-lora-training-notes.md). Three groups: trainer paths
+    (validated to actually exist on disk before a run is allowed to start),
+    hyperparameters (faithful to the reference TOML), and captioning +
+    checkpoint retention. ``keep_last_n_checkpoints == 0`` means
+    "keep all" — the user-requested default.
+    """
+
+    preset: str = "style"  # "style" | "character"
+
+    # Trainer paths — none of these are auto-downloaded.
+    diffusion_pipe_dir: str = ""
+    dit_path: str = ""        # anima-preview3-base.safetensors
+    vae_path: str = ""        # qwen_image_vae.safetensors
+    llm_path: str = ""        # qwen_3_06b_base.safetensors
+    launcher_override: str = ""  # empty -> built-in deepspeed command
+
+    # Adapter
+    rank: int = 32
+    alpha: int = 16  # kohya-only; ignored by canonical tdrussell schema
+
+    # Optimizer / schedule
+    learning_rate: float = 2e-5
+    optimizer_betas: list[float] = field(default_factory=lambda: [0.9, 0.99])
+    weight_decay: float = 0.01
+    eps: float = 1e-8
+    warmup_steps: int = 100
+    gradient_clipping: float = 1.0
+
+    # Batching
+    micro_batch_size: int = 1
+    gradient_accumulation_steps: int = 4
+
+    # Resolution / bucketing
+    resolutions: list[int] = field(default_factory=lambda: [512, 1024])
+    enable_ar_bucket: bool = True
+    min_ar: float = 0.5
+    max_ar: float = 2.0
+    num_ar_buckets: int = 9
+
+    # Duration
+    epochs: int = 40
+    eval_every_n_epochs: int = 5
+    save_every_n_epochs: int = 10
+
+    # Anima specifics — llm_adapter_lr=0 prevents style dilution per the
+    # reference recipe; we expose it but the UI warns against changing it.
+    sigmoid_scale: float = 1.3
+    llm_adapter_lr: float = 0.0
+
+    # Captioning
+    caption_mode: str = "mixed"  # "tags" | "nl" | "mixed"
+    tag_dropout_pct: int = 10
+    trigger_token: str = ""
+
+    # Retention: 0 = keep every checkpoint (the user-requested default).
+    keep_last_n_checkpoints: int = 0
+
+
+@dataclass
 class Project:
     name: str
     slug: str
@@ -92,6 +155,7 @@ class Project:
     # cost on them. False = tag inline like the original pipeline.
     pause_before_tag: bool = True
     llm: LLMConfig = field(default_factory=LLMConfig)
+    training: TrainingConfig = field(default_factory=TrainingConfig)
 
     # ---------------- factory methods ----------------
 
@@ -122,6 +186,15 @@ class Project:
         with open(root / "project.json") as f:
             data = json.load(f)
         llm_raw = data.get("llm") or {}
+        training_raw = data.get("training") or {}
+        # Build TrainingConfig from disk; tolerate missing keys so older
+        # project.json files keep loading after this field was added.
+        defaults = TrainingConfig()
+        training = TrainingConfig(**{
+            f.name: training_raw[f.name]
+            for f in fields(defaults)
+            if f.name in training_raw
+        })
         return cls(
             name=data["name"],
             slug=data["slug"],
@@ -138,6 +211,7 @@ class Project:
                 model=str(llm_raw.get("model") or ""),
                 prompt=str(llm_raw.get("prompt") or ""),
             ),
+            training=training,
         )
 
     def save(self) -> None:
@@ -151,6 +225,7 @@ class Project:
             "source_root": self.source_root,
             "pause_before_tag": self.pause_before_tag,
             "llm": asdict(self.llm),
+            "training": asdict(self.training),
         }
         tmp = self.root / "project.json.tmp"
         tmp.write_text(json.dumps(out, indent=2))
@@ -287,3 +362,18 @@ class Project:
 
     def cache_dir_for(self, video_stem: str) -> Path:
         return self.root / "output" / "cache" / video_stem
+
+    # ---------------- training ----------------
+
+    @property
+    def training_dir(self) -> Path:
+        return self.root / "training"
+
+    @property
+    def training_runs_dir(self) -> Path:
+        return self.training_dir / "runs"
+
+    @property
+    def training_state_path(self) -> Path:
+        """Where the live runner persists its state across server restarts."""
+        return self.training_dir / "state.json"

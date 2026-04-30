@@ -1,5 +1,8 @@
 import type {
   FrameRecord, FramesPage, LLMConfig, ProjectListEntry, ProjectView, QueueItem,
+  TrainingConfig, TrainingConfigResponse, TrainingStatus, TrainingRun,
+  TrainingCheckpoint, TrainingDatasetPreview, TrainingPathCheck,
+  TrainingLogResponse, TrainingTomlPreview,
 } from "./types";
 
 export class ApiError extends Error {
@@ -268,3 +271,89 @@ export const cancelJob = (jobId: string) =>
   request<void>(`/api/queue/${encodeURIComponent(jobId)}`, { method: "DELETE" });
 export const resumeJob = (jobId: string) =>
   request<void>(`/api/queue/${encodeURIComponent(jobId)}/resume`, { method: "POST" });
+
+// ---- training ----
+
+export const getTrainingConfig = (slug: string) =>
+  request<TrainingConfigResponse>(
+    `/api/projects/${encodeURIComponent(slug)}/training/config`,
+  );
+
+export const patchTrainingConfig = (
+  slug: string, body: Partial<TrainingConfig>,
+) => request<TrainingConfigResponse>(
+  `/api/projects/${encodeURIComponent(slug)}/training/config`,
+  { method: "PATCH", body: JSON.stringify(body) },
+);
+
+export const checkTrainingPath = (
+  slug: string, path: string, expect: "any" | "file" | "dir" = "any",
+) => request<TrainingPathCheck>(
+  `/api/projects/${encodeURIComponent(slug)}/training/check-path`,
+  { method: "POST", body: JSON.stringify({ path, expect }) },
+);
+
+export const getTrainingStatus = (slug: string) =>
+  request<TrainingStatus>(
+    `/api/projects/${encodeURIComponent(slug)}/training/status`,
+  );
+
+export const getTrainingLog = (slug: string, tail = 1000) =>
+  request<TrainingLogResponse>(
+    `/api/projects/${encodeURIComponent(slug)}/training/log?tail=${tail}`,
+  );
+
+export const startTraining = (
+  slug: string,
+  body: { resume_from_checkpoint?: string; run_dir_name?: string } = {},
+) => request<TrainingStatus>(
+  `/api/projects/${encodeURIComponent(slug)}/training/start`,
+  { method: "POST", body: JSON.stringify(body) },
+);
+
+export const stopTraining = (slug: string) =>
+  request<TrainingStatus>(
+    `/api/projects/${encodeURIComponent(slug)}/training/stop`,
+    { method: "POST" },
+  );
+
+export const resumeTraining = (
+  slug: string,
+  body: { resume_from_checkpoint?: string; run_dir_name?: string } = {},
+) => request<TrainingStatus>(
+  `/api/projects/${encodeURIComponent(slug)}/training/resume`,
+  { method: "POST", body: JSON.stringify(body) },
+);
+
+export const listTrainingRuns = (slug: string) =>
+  request<{ runs: TrainingRun[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/training/runs`,
+  );
+
+export const listTrainingCheckpoints = (slug: string, runName: string) =>
+  request<{ run_name: string; run_dir: string; checkpoints: TrainingCheckpoint[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/training/runs/${encodeURIComponent(runName)}/checkpoints`,
+  );
+
+export const deleteTrainingCheckpoint = (
+  slug: string, runName: string, ckptName: string,
+) => request<void>(
+  `/api/projects/${encodeURIComponent(slug)}/training/runs/${encodeURIComponent(runName)}/checkpoints/${encodeURIComponent(ckptName)}`,
+  { method: "DELETE" },
+);
+
+export const deleteTrainingRun = (slug: string, runName: string) =>
+  request<void>(
+    `/api/projects/${encodeURIComponent(slug)}/training/runs/${encodeURIComponent(runName)}`,
+    { method: "DELETE" },
+  );
+
+export const getTrainingDatasetPreview = (slug: string) =>
+  request<TrainingDatasetPreview>(
+    `/api/projects/${encodeURIComponent(slug)}/training/dataset-preview`,
+  );
+
+export const getTrainingTomlPreview = (slug: string) =>
+  request<TrainingTomlPreview>(
+    `/api/projects/${encodeURIComponent(slug)}/training/run-toml-preview`,
+  );

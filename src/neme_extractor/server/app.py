@@ -131,6 +131,11 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     queue = JobQueue(
         runner=_make_pipeline_runner(active_progresses), broadcaster=broadcaster,
     )
+    # Training has its own coordinator (one active subprocess at a time);
+    # kept distinct from the extraction queue so the existing job-status
+    # plumbing doesn't have to grow a second "kind" branch.
+    from neme_extractor.server.training_runner import TrainingManager
+    training_manager = TrainingManager(broadcaster=broadcaster)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -139,6 +144,7 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
             yield
         finally:
             await queue.stop()
+            await training_manager.shutdown()
 
     app = FastAPI(title="neme-extractor", lifespan=lifespan)
     app.state.registry = registry
@@ -146,13 +152,14 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     app.state.queue = queue
     app.state.state_dir = state_dir
     app.state.active_progresses = active_progresses
+    app.state.training = training_manager
 
     @app.get("/api/health")
     async def health() -> dict:
         return {"ok": True}
 
     # Routers added later (Tasks 6-10) — currently stubs.
-    from neme_extractor.server.api import projects, sources, refs, frames, llm
+    from neme_extractor.server.api import projects, sources, refs, frames, llm, training
     from neme_extractor.server.api import queue as queue_routes
     from neme_extractor.server.api import ws as ws_routes
     app.include_router(projects.router)
@@ -160,6 +167,7 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     app.include_router(refs.router)
     app.include_router(frames.router)
     app.include_router(llm.router)
+    app.include_router(training.router)
     app.include_router(queue_routes.router)
     app.include_router(ws_routes.router)
 

@@ -106,6 +106,145 @@ export interface JobStages {
 }
 
 export interface ServerEvent {
-  type: EventType;
+  type: EventType | "training.status" | "training.log";
   payload: Record<string, unknown>;
+}
+
+// ---- training ----
+
+export interface TrainingConfig {
+  preset: "style" | "character" | string;
+  diffusion_pipe_dir: string;
+  dit_path: string;
+  vae_path: string;
+  llm_path: string;
+  launcher_override: string;
+
+  rank: number;
+  alpha: number;
+
+  learning_rate: number;
+  optimizer_betas: number[];
+  weight_decay: number;
+  eps: number;
+  warmup_steps: number;
+  gradient_clipping: number;
+
+  micro_batch_size: number;
+  gradient_accumulation_steps: number;
+
+  resolutions: number[];
+  enable_ar_bucket: boolean;
+  min_ar: number;
+  max_ar: number;
+  num_ar_buckets: number;
+
+  epochs: number;
+  eval_every_n_epochs: number;
+  save_every_n_epochs: number;
+
+  sigmoid_scale: number;
+  llm_adapter_lr: number;
+
+  caption_mode: "tags" | "nl" | "mixed" | string;
+  tag_dropout_pct: number;
+  trigger_token: string;
+
+  keep_last_n_checkpoints: number;
+}
+
+export interface TrainingPathCheck {
+  path: string;
+  exists: boolean;
+  is_file: boolean;
+  is_dir: boolean;
+  error: string | null;
+}
+
+export interface TrainingConfigResponse {
+  config: TrainingConfig;
+  path_checks: {
+    diffusion_pipe_dir: TrainingPathCheck;
+    dit_path: TrainingPathCheck;
+    vae_path: TrainingPathCheck;
+    llm_path: TrainingPathCheck;
+  };
+  problems: string[];
+}
+
+export interface TrainingRunState {
+  project_slug: string;
+  run_dir: string;
+  run_name: string;
+  status:
+    | "starting" | "running" | "stopping" | "stopped" | "finished" | "failed";
+  started_at: string;
+  finished_at: string | null;
+  pid: number | null;
+  exit_code: number | null;
+  error: string | null;
+  epoch: number | null;
+  step: number | null;
+  loss: number | null;
+  last_log_line: string;
+  resumed_from: string | null;
+  stop_requested: boolean;
+}
+
+export interface TrainingLogLine {
+  t: number;
+  stream: "stdout" | "stderr" | "disk" | string;
+  line: string;
+}
+
+export interface TrainingStatus {
+  slug: string;
+  running: boolean;
+  global_active_slug: string | null;
+  state: TrainingRunState | null;
+  log_lines: TrainingLogLine[];
+}
+
+export interface TrainingCheckpoint {
+  name: string;
+  path: string;
+  epoch: number | null;
+  step: number | null;
+  size_bytes: number;
+  modified_at: string;
+}
+
+export interface TrainingRun {
+  name: string;
+  path: string;
+  checkpoints: number;
+  latest_checkpoint: string | null;
+  modified_at: string;
+}
+
+export interface TrainingDatasetSample {
+  filename: string;
+  tags: string;
+  nl: string;
+  rendered: string;
+}
+
+export interface TrainingDatasetPreview {
+  total_images: number;
+  with_tags: number;
+  with_descriptions: number;
+  samples: TrainingDatasetSample[];
+  kept_dir: string;
+}
+
+export interface TrainingLogResponse {
+  source: "live" | "disk" | "none";
+  run_name?: string;
+  lines: TrainingLogLine[];
+}
+
+export interface TrainingTomlPreview {
+  dataset_toml: string;
+  run_toml: string;
+  launcher_argv: string[];
 }
