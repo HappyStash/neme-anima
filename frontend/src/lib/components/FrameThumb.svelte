@@ -7,10 +7,13 @@
   type Props = {
     frame: FrameRecord;
     selected: boolean;
-    onclick: (ev: MouseEvent) => void;
-    onexpand: () => void;
+    /** Left-click on the image area opens the preview modal. */
+    onpreview: () => void;
+    /** Middle-click on the image area, OR clicking the toggle pill, toggles
+     *  selection. Mods are forwarded so shift-range still works on middle-click. */
+    onselect: (mods: { shift: boolean; ctrl: boolean }) => void;
   };
-  const { frame, selected, onclick, onexpand }: Props = $props();
+  const { frame, selected, onpreview, onselect }: Props = $props();
 
   let tagText = $state<string | null>(null);
   let hovered = $state(false);
@@ -49,9 +52,30 @@
     const next = pills.map((t) => (t === oldTag ? newTag : t)).join(", ");
     void saveTagText(next);
   }
+
+  // Middle-click (auxclick with button === 1) on the image toggles selection.
+  // We handle it via mousedown to suppress the browser's auto-scroll cursor.
+  function onMouseDown(ev: MouseEvent) {
+    if (ev.button === 1) {
+      ev.preventDefault();
+      onselect({ shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey });
+    }
+  }
+
+  // Left click → preview. Shift-click left button still calls onselect so
+  // the shift-range bulk-select shortcut keeps working without forcing the
+  // user onto the middle button.
+  function onMainClick(ev: MouseEvent) {
+    if (ev.button !== 0) return;
+    if (ev.shiftKey || ev.ctrlKey || ev.metaKey) {
+      onselect({ shift: ev.shiftKey, ctrl: ev.ctrlKey || ev.metaKey });
+      return;
+    }
+    onpreview();
+  }
 </script>
 
-<!-- Wrapper div lets the "expand" action be a real <button> sibling instead
+<!-- Wrapper div lets the toggle pill be a real <button> sibling instead
      of nesting a button inside a button (invalid HTML). -->
 <div
   class="relative aspect-[3/4] group"
@@ -63,11 +87,14 @@
     type="button"
     class="absolute inset-0 rounded-lg overflow-hidden cursor-pointer transition-transform duration-150 hover:scale-[1.02] hover:z-10
       {selected ? 'shadow-[0_0_20px_rgba(99,102,241,0.4)]' : 'shadow-md'}"
-    onclick={onclick}
+    onclick={onMainClick}
+    onmousedown={onMouseDown}
+    onauxclick={(e) => { if (e.button === 1) e.preventDefault(); }}
+    aria-label="Open frame {frame.filename} preview"
   >
     <img src={imageUrl} alt="" class="w-full h-full object-cover" loading="lazy" />
 
-    <span class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-black/60 backdrop-blur-sm rounded text-white opacity-0 transition-opacity {hovered ? 'opacity-100' : ''}">
+    <span class="absolute top-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-black/60 backdrop-blur-sm rounded text-white opacity-0 transition-opacity {hovered ? 'opacity-100' : ''}" style="margin-left: 32px;">
       {frame.video_stem}
     </span>
 
@@ -87,13 +114,21 @@
     {/if}
   </button>
 
-  <!-- Top-right expand button. Sibling of the main button, on top via z-20.
-       stopPropagation keeps the click off the selection toggle. -->
+  <!-- Top-left toggle pill: emerald + checkmark when selected, neutral otherwise.
+       Always visible (the user needs an unmissable affordance even without
+       hovering) and on top of the main button via z-20. -->
   <button
     type="button"
-    onclick={(e) => { e.stopPropagation(); onexpand(); }}
-    title="View full size"
-    aria-label="View frame full size"
-    class="absolute top-1.5 right-1.5 w-6 h-6 rounded-full bg-black/60 hover:bg-black/85 backdrop-blur-sm text-white text-xs leading-none flex items-center justify-center z-20 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity"
-  >⤢</button>
+    onclick={(e) => {
+      e.stopPropagation();
+      onselect({ shift: e.shiftKey, ctrl: e.ctrlKey || e.metaKey });
+    }}
+    title={selected ? "Deselect" : "Select"}
+    aria-label={selected ? "Deselect frame" : "Select frame"}
+    aria-pressed={selected}
+    class="absolute top-1.5 left-1.5 w-6 h-6 rounded-full text-xs leading-none flex items-center justify-center z-20 transition-all border
+      {selected
+        ? 'bg-emerald-500 border-emerald-300 text-white shadow-[0_0_10px_rgba(16,185,129,0.6)] opacity-100'
+        : 'bg-black/60 border-white/30 text-white/80 hover:bg-black/80 opacity-0 group-hover:opacity-100 focus:opacity-100'}"
+  >{selected ? "✓" : "○"}</button>
 </div>

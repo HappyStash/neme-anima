@@ -43,6 +43,11 @@
       class="h-7 px-3 rounded-full text-xs bg-ink-900 border border-ink-700 text-slate-300 hover:bg-ink-800 hover:text-slate-100 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center"
     >{allSelected ? "Deselect all" : "Select all"}</button>
 
+    <span
+      class="h-7 px-3 rounded-full text-xs bg-ink-900 border border-ink-700 text-slate-400 inline-flex items-center"
+      title="Total frames in the current view"
+    >{total} frame{total === 1 ? "" : "s"}</span>
+
     {#if count > 0}
       <div class="gradient-accent text-white h-7 pl-3 pr-1 rounded-full inline-flex items-center gap-1.5 text-xs font-medium border border-white/10 shadow-[0_2px_12px_rgba(99,102,241,0.4)]">
         <span class="bg-white/20 px-2 py-0.5 rounded-full leading-none">{count} selected</span>

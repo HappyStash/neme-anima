@@ -142,3 +142,62 @@ async def test_get_frame_image(client, project_with_frames: Project):
     assert resp.status_code == 200
     assert resp.headers["content-type"].startswith("image/png")
     assert len(resp.content) > 0
+
+
+async def test_crop_creates_derivative_keeps_original(
+    client, project_with_frames: Project, tmp_path: Path,
+) -> None:
+    """Cropping must produce a NEW frame and leave the source untouched —
+    the original is the user's safety net per the LoRA-training brief."""
+    # Replace the 16×16 fixture image with a larger one so we can crop a
+    # meaningful sub-rectangle and verify dimensions.
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 200, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 10, "y": 20, "width": 80, "height": 60},
+    )
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["filename"] == f"{name}_crop1"
+    assert body["video_stem"] == "ep01"
+
+    # Original still on disk.
+    assert (project_with_frames.kept_dir / f"{name}.png").exists()
+    # New cropped derivative on disk with the right size.
+    new_png = project_with_frames.kept_dir / f"{name}_crop1.png"
+    assert new_png.exists()
+    with Image.open(new_png) as im:
+        assert im.size == (80, 60)
+    # Tags carried over from the original.
+    new_txt = project_with_frames.kept_dir / f"{name}_crop1.txt"
+    assert "1girl" in new_txt.read_text(encoding="utf-8")
+
+
+async def test_crop_clamps_oob_rectangle(
+    client, project_with_frames: Project,
+) -> None:
+    name = "ep01__s000_t001_f000010"
+    big = np.zeros((100, 100, 3), dtype=np.uint8)
+    Image.fromarray(big).save(project_with_frames.kept_dir / f"{name}.png")
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/crop",
+        json={"x": 90, "y": 90, "width": 999, "height": 999},
+    )
+    assert resp.status_code == 200
+    new_png = project_with_frames.kept_dir / f"{name}_crop1.png"
+    with Image.open(new_png) as im:
+        # Clamped to the bottom-right 10×10 corner.
+        assert im.size == (10, 10)
+
+
+async def test_crop_404_for_unknown_frame(
+    client, project_with_frames: Project,
+) -> None:
+    resp = await client.post(
+        f"/api/projects/{project_with_frames.slug}/frames/nope/crop",
+        json={"x": 0, "y": 0, "width": 10, "height": 10},
+    )
+    assert resp.status_code == 404

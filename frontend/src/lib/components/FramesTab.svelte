@@ -1,11 +1,20 @@
 <script lang="ts">
+  import * as api from "$lib/api";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
   import FrameThumb from "./FrameThumb.svelte";
   import FullSizeModal from "./FullSizeModal.svelte";
 
-  let fullsize = $state<string | null>(null);
+  let previewIndex = $state<number | null>(null);
+
+  // One id per dropped file; the skeleton tile renders until that file's
+  // upload promise resolves and the frames list is refreshed.
+  let pendingDrops = $state<{ id: number; name: string }[]>([]);
+  let nextDropId = 0;
+
+  let dragDepth = $state(0); // counter so child enter/leave doesn't flicker
+  let dragActive = $derived(dragDepth > 0);
 
   $effect(() => {
     const slug = projectsStore.active?.slug;
@@ -14,25 +23,116 @@
     }
   });
 
-  function handleClick(index: number, ev: MouseEvent) {
-    // Plain click toggles selection (add if missing, remove if present).
-    // Shift-click still extends a range from the last anchor for bulk select.
+  function handleSelect(index: number, mods: { shift: boolean; ctrl: boolean }) {
+    // Plain middle/toggle click toggles a single tile; shift extends a range.
     framesStore.click(index, {
-      shift: ev.shiftKey,
-      ctrl: !ev.shiftKey || ev.ctrlKey || ev.metaKey,
+      shift: mods.shift,
+      ctrl: !mods.shift || mods.ctrl,
     });
   }
 
+  function openPreview(index: number) {
+    previewIndex = index;
+  }
+
+  function navPreview(next: number) {
+    if (next < 0 || next >= framesStore.items.length) return;
+    previewIndex = next;
+  }
+
+  async function refreshFramesAfterCrop() {
+    const slug = projectsStore.active?.slug;
+    if (slug) {
+      await framesStore.refresh(slug, viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {});
+    }
+  }
+
+  // ---------------- drag-and-drop image import ----------------
+
+  function isImageDrag(ev: DragEvent): boolean {
+    const items = ev.dataTransfer?.items;
+    if (!items || items.length === 0) {
+      // Some browsers don't expose `items` on dragenter — fall back to types.
+      const types = ev.dataTransfer?.types ?? [];
+      return Array.from(types).includes("Files");
+    }
+    return Array.from(items).some((it) => it.kind === "file");
+  }
+
+  function onDragEnter(ev: DragEvent) {
+    if (!isImageDrag(ev)) return;
+    ev.preventDefault();
+    dragDepth++;
+  }
+
+  function onDragOver(ev: DragEvent) {
+    if (!isImageDrag(ev)) return;
+    ev.preventDefault();
+    if (ev.dataTransfer) ev.dataTransfer.dropEffect = "copy";
+  }
+
+  function onDragLeave(ev: DragEvent) {
+    if (!isImageDrag(ev)) return;
+    ev.preventDefault();
+    dragDepth = Math.max(0, dragDepth - 1);
+  }
+
+  async function onDrop(ev: DragEvent) {
+    ev.preventDefault();
+    dragDepth = 0;
+    const slug = projectsStore.active?.slug;
+    if (!slug) return;
+    const all = Array.from(ev.dataTransfer?.files ?? []);
+    const images = all.filter(
+      (f) => f.type.startsWith("image/") || /\.(png|jpe?g|webp|gif|bmp)$/i.test(f.name),
+    );
+    if (images.length === 0) return;
+
+    // Spawn one skeleton per dropped image so the user has immediate feedback
+    // while the server downscales + auto-tags + writes the frame.
+    const placeholders = images.map((f) => ({ id: ++nextDropId, name: f.name }));
+    pendingDrops = [...pendingDrops, ...placeholders];
+
+    try {
+      await api.uploadFrames(slug, images);
+      await framesStore.refresh(
+        slug,
+        viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {},
+      );
+    } catch (e) {
+      console.error("upload failed", e);
+      alert("Upload failed — see console for details.");
+    } finally {
+      const ids = new Set(placeholders.map((p) => p.id));
+      pendingDrops = pendingDrops.filter((p) => !ids.has(p.id));
+    }
+  }
+
   let cols = $derived(viewStore.density);
+  let filenames = $derived(framesStore.items.map((i) => i.filename));
+  // Snapshot the selection on every bump so each FrameThumb sees a stable
+  // boolean and doesn't have to read `selectionVersion` itself.
+  let selectedSet = $derived.by(() => {
+    framesStore.selectionVersion;
+    return framesStore.selection.selected();
+  });
 </script>
 
-<div class="mt-4">
+<div
+  class="mt-4 relative"
+  ondragenter={onDragEnter}
+  ondragover={onDragOver}
+  ondragleave={onDragLeave}
+  ondrop={onDrop}
+  role="region"
+  aria-label="Frames grid"
+>
   {#if framesStore.loading}
     <p class="text-slate-500 py-12 text-center">Loading frames…</p>
-  {:else if framesStore.items.length === 0}
+  {:else if framesStore.items.length === 0 && pendingDrops.length === 0}
     <div class="py-24 text-center text-slate-500">
       <p class="text-lg mb-1">No frames yet.</p>
-      <p class="text-sm">Add a video in Sources and run extract.</p>
+      <p class="text-sm">Add a video in Sources and run extract — or drop image files here.</p>
     </div>
   {:else}
     <div
@@ -42,15 +142,46 @@
       {#each framesStore.items as f, i (f.filename)}
         <FrameThumb
           frame={f}
-          selected={(framesStore.selectionVersion, framesStore.selection.has(f.filename))}
-          onclick={(ev) => handleClick(i, ev)}
-          onexpand={() => (fullsize = f.filename)}
+          selected={selectedSet.has(f.filename)}
+          onpreview={() => openPreview(i)}
+          onselect={(mods) => handleSelect(i, mods)}
         />
       {/each}
+
+      {#each pendingDrops as p (p.id)}
+        <div
+          class="relative aspect-[3/4] rounded-lg overflow-hidden bg-ink-900 border border-ink-700 flex flex-col items-center justify-center gap-2"
+          title="Uploading {p.name}…"
+        >
+          <span
+            class="block w-8 h-8 rounded-full border-2 border-ink-700 border-t-accent-500 animate-spin"
+            aria-hidden="true"
+          ></span>
+          <span class="text-[10px] text-slate-500 px-2 text-center truncate w-full">
+            {p.name}
+          </span>
+        </div>
+      {/each}
+    </div>
+  {/if}
+
+  {#if dragActive}
+    <!-- Translucent drop overlay — pointer-events:none so the underlying
+         drop handler still fires; pure visual affordance. -->
+    <div
+      class="absolute inset-0 rounded-xl border-2 border-dashed border-emerald-400 bg-emerald-500/10 pointer-events-none flex items-center justify-center"
+    >
+      <p class="text-emerald-200 text-sm font-medium">Drop images to add as custom frames</p>
     </div>
   {/if}
 </div>
 
-{#if fullsize}
-  <FullSizeModal filename={fullsize} onclose={() => (fullsize = null)} />
+{#if previewIndex !== null && framesStore.items[previewIndex]}
+  <FullSizeModal
+    {filenames}
+    index={previewIndex}
+    onnav={navPreview}
+    onclose={() => (previewIndex = null)}
+    oncropped={() => { void refreshFramesAfterCrop(); }}
+  />
 {/if}

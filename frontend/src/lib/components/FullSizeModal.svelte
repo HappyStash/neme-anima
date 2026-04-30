@@ -1,36 +1,365 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
 
   type Props = {
-    filename: string;
+    /** Ordered list of frame filenames in the active view, used for ←/→ nav. */
+    filenames: string[];
+    /** Index into `filenames` of the frame currently shown. */
+    index: number;
+    /** Parent owns the index; modal asks it to step. */
+    onnav: (next: number) => void;
     onclose: () => void;
+    /** Called after a crop derivative has been saved server-side. */
+    oncropped: () => void;
   };
-  const { filename, onclose }: Props = $props();
+  const { filenames, index, onnav, onclose, oncropped }: Props = $props();
 
+  // ---- LoRA-friendly crop guardrails (kept in sync with the brief) ----
+  // Anima's bucket range is [0.5, 2.0]; the model was largely trained at 512px,
+  // so cropping below that on the short side actively hurts.
+  const AR_MIN = 0.5;
+  const AR_MAX = 2.0;
+  const MIN_SHORT_SIDE_PX = 512;
+
+  let filename = $derived(filenames[index] ?? "");
   let imageUrl = $derived(
-    projectsStore.active
+    projectsStore.active && filename
       ? api.frameImageUrl(projectsStore.active.slug, filename)
       : "",
   );
 
-  function onKey(ev: KeyboardEvent) {
-    if (ev.key === "Escape") onclose();
+  // Image natural size (set after load); display container is sized to fit
+  // viewport while preserving AR, so display→image px is a single scale.
+  let natW = $state(0);
+  let natH = $state(0);
+  let viewportW = $state(0);
+  let viewportH = $state(0);
+  let imgEl: HTMLImageElement | undefined = $state();
+  let viewportEl: HTMLDivElement | undefined = $state();
+
+  // Crop rect in IMAGE pixel space (not display). Resets to full-image on every
+  // image load, which also resets the "modified" flag.
+  let cropX = $state(0);
+  let cropY = $state(0);
+  let cropW = $state(0);
+  let cropH = $state(0);
+  let initialW = $state(0);
+  let initialH = $state(0);
+  let modified = $state(false);
+  let saving = $state(false);
+
+  let scale = $derived.by(() => {
+    if (!natW || !natH || !viewportW || !viewportH) return 1;
+    return Math.min(viewportW / natW, viewportH / natH);
+  });
+  let displayW = $derived(natW * scale);
+  let displayH = $derived(natH * scale);
+
+  function resetCropToFull() {
+    cropX = 0;
+    cropY = 0;
+    cropW = natW;
+    cropH = natH;
+    initialW = natW;
+    initialH = natH;
+    modified = false;
   }
+
+  function onImgLoad() {
+    if (!imgEl) return;
+    natW = imgEl.naturalWidth;
+    natH = imgEl.naturalHeight;
+    resetCropToFull();
+  }
+
+  // Reset rect any time the displayed filename changes (arrow-key nav).
+  $effect(() => {
+    void filename;
+    natW = 0;
+    natH = 0;
+    cropX = 0;
+    cropY = 0;
+    cropW = 0;
+    cropH = 0;
+    modified = false;
+  });
+
+  function measureViewport() {
+    if (!viewportEl) return;
+    viewportW = viewportEl.clientWidth;
+    viewportH = viewportEl.clientHeight;
+  }
+
+  $effect(() => {
+    measureViewport();
+    const ro = new ResizeObserver(measureViewport);
+    if (viewportEl) ro.observe(viewportEl);
+    return () => ro.disconnect();
+  });
+
+  // ---------------- crop validity ----------------
+
+  let cropAR = $derived(cropH > 0 ? cropW / cropH : 1);
+  let cropShortSide = $derived(Math.min(cropW, cropH));
+  let arInRange = $derived(cropAR >= AR_MIN && cropAR <= AR_MAX);
+  let sizeOk = $derived(cropShortSide >= MIN_SHORT_SIDE_PX);
+  let canConfirm = $derived(modified && arInRange && sizeOk && !saving);
+
+  let invalidReason = $derived.by(() => {
+    if (!arInRange) {
+      return `Aspect ratio ${cropAR.toFixed(2)} is outside the trainer's bucket range [0.5, 2.0]`;
+    }
+    if (!sizeOk) {
+      return `Short side ${cropShortSide}px is below ${MIN_SHORT_SIDE_PX}px (Anima trains at ≥512px)`;
+    }
+    return "";
+  });
+
+  // ---------------- pointer drag (resize / move) ----------------
+
+  type DragMode =
+    | "move"
+    | "n" | "s" | "e" | "w"
+    | "ne" | "nw" | "se" | "sw"
+    | null;
+
+  let dragMode = $state<DragMode>(null);
+  let dragStart = $state<{
+    px: number; py: number;
+    x: number; y: number; w: number; h: number;
+  } | null>(null);
+
+  function startDrag(mode: DragMode, ev: PointerEvent) {
+    if (!mode) return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    (ev.currentTarget as Element).setPointerCapture(ev.pointerId);
+    dragMode = mode;
+    dragStart = {
+      px: ev.clientX, py: ev.clientY,
+      x: cropX, y: cropY, w: cropW, h: cropH,
+    };
+  }
+
+  function onPointerMove(ev: PointerEvent) {
+    if (!dragMode || !dragStart) return;
+    const dxImg = (ev.clientX - dragStart.px) / scale;
+    const dyImg = (ev.clientY - dragStart.py) / scale;
+
+    let { x, y, w, h } = dragStart;
+    if (dragMode === "move") {
+      x = Math.max(0, Math.min(natW - w, x + dxImg));
+      y = Math.max(0, Math.min(natH - h, y + dyImg));
+    } else {
+      // Edge / corner resize. Anchor the OPPOSITE side(s) so the rect stays
+      // within image bounds and the user's pointer drives one corner.
+      let nx = x, ny = y, nw = w, nh = h;
+      if (dragMode.includes("e")) nw = Math.max(1, w + dxImg);
+      if (dragMode.includes("w")) {
+        const newX = Math.max(0, Math.min(x + w - 1, x + dxImg));
+        nw = Math.max(1, w - (newX - x));
+        nx = newX;
+      }
+      if (dragMode.includes("s")) nh = Math.max(1, h + dyImg);
+      if (dragMode.includes("n")) {
+        const newY = Math.max(0, Math.min(y + h - 1, y + dyImg));
+        nh = Math.max(1, h - (newY - y));
+        ny = newY;
+      }
+      // Clamp inside image.
+      nw = Math.min(nw, natW - nx);
+      nh = Math.min(nh, natH - ny);
+      x = nx; y = ny; w = nw; h = nh;
+    }
+    cropX = Math.round(x);
+    cropY = Math.round(y);
+    cropW = Math.round(w);
+    cropH = Math.round(h);
+    if (cropW !== initialW || cropH !== initialH || cropX !== 0 || cropY !== 0) {
+      modified = true;
+    }
+  }
+
+  function onPointerUp(ev: PointerEvent) {
+    if (!dragMode) return;
+    try { (ev.currentTarget as Element).releasePointerCapture(ev.pointerId); }
+    catch { /* not captured */ }
+    dragMode = null;
+    dragStart = null;
+  }
+
+  // ---------------- key handling ----------------
+
+  function onKey(ev: KeyboardEvent) {
+    const target = ev.target as HTMLElement | null;
+    if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    if (ev.key === "Escape") { onclose(); return; }
+    if (ev.key === "ArrowLeft" && index > 0) {
+      onnav(index - 1);
+      ev.preventDefault();
+    } else if (ev.key === "ArrowRight" && index < filenames.length - 1) {
+      onnav(index + 1);
+      ev.preventDefault();
+    } else if (ev.key === "Enter" && canConfirm) {
+      void confirmCrop();
+      ev.preventDefault();
+    }
+  }
+
+  // ---------------- save ----------------
+
+  async function confirmCrop() {
+    const slug = projectsStore.active?.slug;
+    if (!slug || !canConfirm) return;
+    saving = true;
+    try {
+      await api.cropFrame(slug, filename, {
+        x: cropX, y: cropY, width: cropW, height: cropH,
+      });
+      oncropped();
+      onclose();
+    } catch (e) {
+      console.error("crop failed", e);
+      alert("Crop failed — see console for details.");
+    } finally {
+      saving = false;
+    }
+  }
+
+  onDestroy(() => { /* nothing — pointer captures release themselves */ });
+
+  // Display-space helpers (used by the rect overlay).
+  let rectDispX = $derived(cropX * scale);
+  let rectDispY = $derived(cropY * scale);
+  let rectDispW = $derived(cropW * scale);
+  let rectDispH = $derived(cropH * scale);
 </script>
 
 <svelte:window onkeydown={onKey} />
 
-<!-- Click anywhere — backdrop or image — closes the modal, per spec. -->
-<button
-  type="button"
-  class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6 cursor-zoom-out"
-  onclick={onclose}
-  aria-label="Close fullsize preview"
+<!-- Backdrop: click closes ONLY when click lands outside the image area.
+     Keyboard close is via `Escape` on the global listener above, so the
+     a11y "click events have key events" rule is already satisfied at the
+     window level. -->
+<!-- svelte-ignore a11y_click_events_have_key_events -->
+<div
+  class="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-6"
+  role="dialog"
+  aria-modal="true"
+  tabindex="-1"
+  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onpointermove={onPointerMove}
+  onpointerup={onPointerUp}
 >
-  <img
-    src={imageUrl}
-    alt={filename}
-    class="max-w-full max-h-full object-contain rounded shadow-2xl"
-  />
-</button>
+  <!-- svelte-ignore a11y_click_events_have_key_events -->
+  <div
+    bind:this={viewportEl}
+    role="presentation"
+    class="relative max-w-full max-h-full w-full h-full flex items-center justify-center"
+    onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  >
+    {#if displayW > 0 && displayH > 0}
+      <div
+        class="relative shadow-2xl rounded overflow-hidden select-none"
+        style="width: {displayW}px; height: {displayH}px;"
+      >
+        <img
+          bind:this={imgEl}
+          src={imageUrl}
+          alt={filename}
+          draggable="false"
+          onload={onImgLoad}
+          class="block w-full h-full select-none"
+        />
+
+        <!-- Dim overlay outside the rect (4 strips). -->
+        {#if cropW > 0 && cropH > 0}
+          <div class="absolute inset-x-0 top-0 bg-black/60 pointer-events-none"
+               style="height: {rectDispY}px;"></div>
+          <div class="absolute inset-x-0 bottom-0 bg-black/60 pointer-events-none"
+               style="top: {rectDispY + rectDispH}px;"></div>
+          <div class="absolute bg-black/60 pointer-events-none"
+               style="left: 0; top: {rectDispY}px; width: {rectDispX}px; height: {rectDispH}px;"></div>
+          <div class="absolute bg-black/60 pointer-events-none"
+               style="left: {rectDispX + rectDispW}px; top: {rectDispY}px; right: 0; height: {rectDispH}px;"></div>
+
+          <!-- Crop rectangle: drag-to-move + 8 handles. role/tabindex kept
+               so a11y lint stays clean — the drag is mouse-only by design. -->
+          <div
+            role="application"
+            aria-label="Crop rectangle, drag to move"
+            tabindex="-1"
+            class="absolute border-2 border-emerald-400 cursor-move"
+            style="left: {rectDispX}px; top: {rectDispY}px; width: {rectDispW}px; height: {rectDispH}px;"
+            onpointerdown={(e) => startDrag("move", e)}
+          >
+            {#each [
+              ["nw", "top-0 left-0 -translate-x-1/2 -translate-y-1/2 cursor-nwse-resize"],
+              ["n",  "top-0 left-1/2 -translate-x-1/2 -translate-y-1/2 cursor-ns-resize"],
+              ["ne", "top-0 right-0 translate-x-1/2 -translate-y-1/2 cursor-nesw-resize"],
+              ["e",  "top-1/2 right-0 translate-x-1/2 -translate-y-1/2 cursor-ew-resize"],
+              ["se", "bottom-0 right-0 translate-x-1/2 translate-y-1/2 cursor-nwse-resize"],
+              ["s",  "bottom-0 left-1/2 -translate-x-1/2 translate-y-1/2 cursor-ns-resize"],
+              ["sw", "bottom-0 left-0 -translate-x-1/2 translate-y-1/2 cursor-nesw-resize"],
+              ["w",  "top-1/2 left-0 -translate-x-1/2 -translate-y-1/2 cursor-ew-resize"],
+            ] as [pos, cls] (pos)}
+              <div
+                role="button"
+                tabindex="-1"
+                aria-label="Resize {pos}"
+                class="absolute w-3 h-3 bg-emerald-400 border border-emerald-900 rounded-sm {cls}"
+                onpointerdown={(e) => startDrag(pos as DragMode, e)}
+              ></div>
+            {/each}
+          </div>
+
+          <!-- Live size label inside the rect, top-left, dim background. -->
+          <div
+            class="absolute pointer-events-none px-1.5 py-0.5 text-[10px] font-mono rounded bg-black/70 text-emerald-200"
+            style="left: {rectDispX + 4}px; top: {rectDispY + 4}px;"
+          >
+            {cropW}×{cropH}  ·  AR {cropAR.toFixed(2)}
+          </div>
+        {/if}
+
+        <!-- Validate button: only when modified. Position top-right OUTSIDE the
+             rect overlays so it's always clickable; uses image's own corner. -->
+        {#if modified}
+          <button
+            type="button"
+            onclick={(e) => { e.stopPropagation(); void confirmCrop(); }}
+            disabled={!canConfirm}
+            title={canConfirm
+              ? "Save crop (Enter)"
+              : invalidReason || (saving ? "Saving…" : "")}
+            aria-label="Confirm crop"
+            class="absolute top-2 right-2 w-9 h-9 rounded-full text-base font-bold flex items-center justify-center shadow-lg transition-all
+              {canConfirm
+                ? 'bg-emerald-500 hover:bg-emerald-400 text-white'
+                : 'bg-slate-700 text-slate-400 cursor-not-allowed'}"
+          >
+            {saving ? "…" : "✓"}
+          </button>
+        {/if}
+
+        <!-- Frame counter, bottom-center, subtle. -->
+        {#if filenames.length > 1}
+          <div class="absolute bottom-2 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-black/60 text-[10px] text-slate-300 pointer-events-none">
+            {index + 1} / {filenames.length}  ·  ←/→ to navigate
+          </div>
+        {/if}
+      </div>
+    {:else}
+      <!-- Hidden img to trigger load + populate naturalWidth/Height. -->
+      <img
+        bind:this={imgEl}
+        src={imageUrl}
+        alt={filename}
+        onload={onImgLoad}
+        class="opacity-0 pointer-events-none absolute"
+      />
+    {/if}
+  </div>
+</div>

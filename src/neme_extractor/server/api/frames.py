@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import io
 import re
+import secrets
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -13,6 +16,15 @@ from neme_extractor.storage.metadata import FrameRecord, MetadataLog
 from neme_extractor.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["frames"])
+
+# All drag-and-drop uploaded frames live under this synthetic video stem so
+# they can be filtered/grouped just like extracted frames.
+CUSTOM_VIDEO_STEM = "custom_uploads"
+
+# Largest longest-side we keep on disk for uploaded images. The trainer
+# handles bucketing/resizing itself, so cropping is wasteful, but a hard
+# downscale ceiling keeps storage and tagging latency bounded.
+MAX_UPLOAD_LONGEST_SIDE = 2048
 
 
 class PutTagsBody(BaseModel):
@@ -28,6 +40,13 @@ class BulkReplaceBody(BaseModel):
     pattern: str
     replacement: str
     case_insensitive: bool = False
+
+
+class CropBody(BaseModel):
+    x: int
+    y: int
+    width: int
+    height: int
 
 
 def _load(request: Request, slug: str) -> Project:
@@ -163,3 +182,199 @@ async def bulk_tags_replace(
             txt.write_text(after, encoding="utf-8")
             changed += n
     return {"changed": changed}
+
+
+def _record_to_dict(rec: FrameRecord) -> dict:
+    return {
+        "filename": rec.filename,
+        "kept": rec.kept,
+        "video_stem": rec.video_stem,
+        "scene_idx": rec.scene_idx,
+        "tracklet_id": rec.tracklet_id,
+        "frame_idx": rec.frame_idx,
+        "timestamp_seconds": rec.timestamp_seconds,
+        "ccip_distance": rec.ccip_distance,
+        "score": rec.score,
+    }
+
+
+def _find_record(project: Project, filename: str) -> FrameRecord | None:
+    """Walk the metadata log and return the most recent record for ``filename``."""
+    found: FrameRecord | None = None
+    log = MetadataLog(project.metadata_path)
+    for rec in log.iter_records():
+        if rec.filename == filename:
+            found = rec
+    return found
+
+
+def _next_crop_filename(project: Project, base: str) -> str:
+    """Generate ``<base>_crop<n>`` not colliding with anything on disk."""
+    n = 1
+    while (project.kept_dir / f"{base}_crop{n}.png").exists():
+        n += 1
+        if n > 9999:
+            raise RuntimeError(f"too many crops of {base!r}")
+    return f"{base}_crop{n}"
+
+
+@router.post("/{slug}/frames/{filename}/crop")
+async def crop_frame_endpoint(
+    request: Request, slug: str, filename: str, body: CropBody,
+) -> dict:
+    """Save a cropped derivative as a NEW frame; the original is preserved."""
+    from PIL import Image
+
+    project = _load(request, slug)
+    src_png, src_txt = _frame_paths(project, filename)
+    if not src_png.exists():
+        raise HTTPException(status_code=404, detail="frame not found")
+
+    original = _find_record(project, filename)
+    if original is None:
+        raise HTTPException(status_code=404, detail="frame metadata not found")
+
+    with Image.open(src_png) as im:
+        im_w, im_h = im.size
+        x = max(0, min(int(body.x), im_w))
+        y = max(0, min(int(body.y), im_h))
+        w = max(1, min(int(body.width), im_w - x))
+        h = max(1, min(int(body.height), im_h - y))
+        cropped = im.crop((x, y, x + w, y + h))
+        new_base = _next_crop_filename(project, filename)
+        out_png = project.kept_dir / f"{new_base}.png"
+        cropped.save(out_png)
+
+    # Carry the original's tags forward; the crop usually keeps roughly the
+    # same subject and the user can re-edit / re-tag on demand.
+    out_txt = project.kept_dir / f"{new_base}.txt"
+    if src_txt.exists():
+        out_txt.write_bytes(src_txt.read_bytes())
+    else:
+        out_txt.write_text("\n", encoding="utf-8")
+
+    new_rec = FrameRecord(
+        filename=new_base,
+        kept=True,
+        scene_idx=original.scene_idx,
+        tracklet_id=original.tracklet_id,
+        frame_idx=original.frame_idx,
+        timestamp_seconds=original.timestamp_seconds,
+        bbox=(x, y, x + w, y + h),
+        ccip_distance=original.ccip_distance,
+        sharpness=original.sharpness,
+        visibility=original.visibility,
+        aspect=(w / h) if h else 1.0,
+        score=original.score,
+        video_stem=original.video_stem,
+    )
+    MetadataLog(project.metadata_path).append(new_rec)
+    return _record_to_dict(new_rec)
+
+
+def _get_or_make_tagger(request: Request):
+    """Cache a single Tagger instance on app.state — WD14 model load is slow."""
+    cached = getattr(request.app.state, "_tagger", None)
+    if cached is not None:
+        return cached
+    from neme_extractor.tag import Tagger
+    cached = Tagger()
+    request.app.state._tagger = cached
+    return cached
+
+
+def _process_uploaded_image(
+    project: Project, data: bytes, filename_hint: str,
+) -> tuple[Path, int, int, str]:
+    """Decode, downscale-if-huge, save PNG with a unique name. No tagging here.
+
+    Returns (png_path, width, height, base_filename).
+    """
+    from PIL import Image, ImageOps
+
+    with Image.open(io.BytesIO(data)) as im:
+        im = ImageOps.exif_transpose(im)
+        im = im.convert("RGB")
+        if max(im.width, im.height) > MAX_UPLOAD_LONGEST_SIDE:
+            scale = MAX_UPLOAD_LONGEST_SIDE / max(im.width, im.height)
+            new_size = (max(1, int(im.width * scale)),
+                        max(1, int(im.height * scale)))
+            im = im.resize(new_size, Image.LANCZOS)
+        # 8-char random suffix is plenty to avoid collisions with concurrent drops.
+        token = secrets.token_hex(4)
+        base = f"{CUSTOM_VIDEO_STEM}__{token}"
+        png_path = project.kept_dir / f"{base}.png"
+        # Vanishingly unlikely, but keep the loop tight just in case.
+        while png_path.exists():
+            token = secrets.token_hex(4)
+            base = f"{CUSTOM_VIDEO_STEM}__{token}"
+            png_path = project.kept_dir / f"{base}.png"
+        im.save(png_path)
+        return png_path, im.width, im.height, base
+
+
+@router.post("/{slug}/frames/upload")
+async def upload_frames(
+    request: Request, slug: str, files: list[UploadFile],
+) -> dict:
+    """Accept dropped image files, store + auto-tag them as custom-source frames."""
+    import numpy as np
+    from PIL import Image
+
+    project = _load(request, slug)
+    project.kept_dir.mkdir(parents=True, exist_ok=True)
+    log = MetadataLog(project.metadata_path)
+
+    added: list[dict] = []
+    skipped: list[str] = []
+
+    tagger = _get_or_make_tagger(request)
+
+    for f in files:
+        try:
+            data = await f.read()
+            if not data:
+                skipped.append(f.filename or "<empty>")
+                continue
+            try:
+                png_path, w, h, base = await asyncio.to_thread(
+                    _process_uploaded_image, project, data, f.filename or "drop",
+                )
+            except Exception:
+                skipped.append(f.filename or "<unknown>")
+                continue
+
+            def _do_tag(p: Path) -> str:
+                with Image.open(p) as pim:
+                    arr = np.array(pim.convert("RGB"))
+                return tagger.tag(arr).text
+
+            try:
+                tag_text = await asyncio.to_thread(_do_tag, png_path)
+            except Exception:
+                tag_text = ""
+            png_path.with_suffix(".txt").write_text(
+                tag_text + "\n", encoding="utf-8",
+            )
+
+            rec = FrameRecord(
+                filename=base,
+                kept=True,
+                scene_idx=0,
+                tracklet_id=0,
+                frame_idx=0,
+                timestamp_seconds=0.0,
+                bbox=(0, 0, w, h),
+                ccip_distance=0.0,
+                sharpness=0.0,
+                visibility=0.0,
+                aspect=(w / h) if h else 1.0,
+                score=0.0,
+                video_stem=CUSTOM_VIDEO_STEM,
+            )
+            log.append(rec)
+            added.append(_record_to_dict(rec))
+        finally:
+            await f.close()
+
+    return {"added": added, "skipped": skipped}

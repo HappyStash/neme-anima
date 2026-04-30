@@ -1,5 +1,5 @@
 import type {
-  FramesPage, ProjectListEntry, ProjectView, QueueItem,
+  FrameRecord, FramesPage, ProjectListEntry, ProjectView, QueueItem,
 } from "./types";
 
 export class ApiError extends Error {
@@ -177,6 +177,29 @@ export const bulkTagsReplace = (
 
 export const frameImageUrl = (slug: string, filename: string) =>
   `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/image`;
+
+export const cropFrame = (
+  slug: string, filename: string,
+  rect: { x: number; y: number; width: number; height: number },
+) => request<FrameRecord>(
+  `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/crop`,
+  { method: "POST", body: JSON.stringify(rect) },
+);
+
+export const uploadFrames = async (slug: string, files: File[]) => {
+  const fd = new FormData();
+  for (const f of files) fd.append("files", f, f.name);
+  const resp = await fetch(
+    `/api/projects/${encodeURIComponent(slug)}/frames/upload`,
+    { method: "POST", body: fd },
+  );
+  if (!resp.ok) {
+    let detail: unknown = null;
+    try { detail = await resp.json(); } catch { /* body not JSON */ }
+    throw new ApiError(resp.status, detail);
+  }
+  return resp.json() as Promise<{ added: FrameRecord[]; skipped: string[] }>;
+};
 
 // ---- queue ----
 
