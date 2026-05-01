@@ -4,7 +4,7 @@ Pulls character-LoRA training crops out of a video. Give it a clip and reference
 
 The frame extractor and tagger are model-agnostic. The bundled LoRA trainer is wired for Anima.
 
-![Result with a Chie LoRA applied to Anima](docs/chie.png)
+<img src="docs/chie.png" alt="Result with a Chie LoRA applied to Anima" width="50%">
 
 ## Pipeline
 
