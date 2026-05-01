@@ -80,11 +80,19 @@ uv run neme-anima project rerun ~/neme-projects/megumin --video ep01
 
 ## Web UI
 
+After cloning the repository:
+
+```sh
+cd frontend && npm install && npm run build && cd ..
+```
+
+Then start the server:
+
 ```sh
 uv run neme-anima ui
 ```
 
-Binds to `127.0.0.1:<random-port>` and opens the Svelte SPA. Tabs: Sources, Frames, Training, Settings.
+Binds to `127.0.0.1:<random-port>` and opens the SPA. Tabs: Sources, Frames, Training, Settings.
 
 ### Sources
 
