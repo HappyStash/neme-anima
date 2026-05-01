@@ -100,11 +100,22 @@
     pendingDrops = [...pendingDrops, ...placeholders];
 
     try {
-      await api.uploadFrames(slug, images);
+      const resp = await api.uploadFrames(slug, images);
       await framesStore.refresh(slug, {
         source: viewStore.sourceFilter ?? undefined,
         query: viewStore.tagQuery || undefined,
       });
+      // Upload succeeded, but the per-image LLM-describe call may have
+      // failed silently (endpoint timeout, wrong model, auth refused).
+      // Surface that so the user knows their dropped image came back
+      // tag-only — otherwise it looks like LLM tagging is configured but
+      // simply not running.
+      if (resp.llm_error) {
+        alert(
+          `Image${images.length === 1 ? "" : "s"} uploaded and tagged, ` +
+          `but the LLM description call failed:\n\n${resp.llm_error}`,
+        );
+      }
     } catch (e) {
       console.error("upload failed", e);
       alert("Upload failed — see console for details.");

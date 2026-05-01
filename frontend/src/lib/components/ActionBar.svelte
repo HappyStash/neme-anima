@@ -158,24 +158,33 @@
 {#if onFramesTab}
   <div class="flex items-center gap-2 h-7">
     {#if count > 0}
+      <!-- Action chips inside the purple selection pill carry tinted
+           translucent backgrounds so each action is distinct at a glance
+           while still reading as part of the cluster:
+             Delete  → red (destructive, conventional warning hue)
+             Regex…  → amber (text-edit / "transform the tag line")
+             Re-tag  → emerald (rewrite from a model)
+             Describe → teal (also model-driven, sibling colour to emerald)
+           All sit on the purple gradient via /30 alpha so the parent pill
+           still reads as a single unit. -->
       <div class="gradient-accent text-white h-7 pl-3 pr-1 rounded-full inline-flex items-center gap-1.5 text-xs font-medium border border-white/10 shadow-[0_2px_12px_rgba(99,102,241,0.4)]">
         <span class="bg-white/20 px-2 py-0.5 rounded-full leading-none">{count} selected</span>
         <button
           type="button"
           onclick={deleteSelected}
-          class="bg-white/15 hover:bg-red-500/60 rounded-full px-2.5 h-5 transition-colors inline-flex items-center"
+          class="bg-red-500/35 hover:bg-red-500/60 rounded-full px-2.5 h-5 transition-colors inline-flex items-center"
         >Delete</button>
         <button
           type="button"
           onclick={onopenRegex}
-          class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center"
+          class="bg-amber-400/30 hover:bg-amber-400/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center"
         >Regex…</button>
         <button
           type="button"
           onclick={retagDanbooru}
           disabled={retagBusy}
           title="Re-run WD14 tagger on selected frames (preserves the LLM description line)"
-          class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+          class="bg-emerald-500/30 hover:bg-emerald-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
         >Re-tag</button>
         {#if llmModelSelected}
           <button
@@ -183,7 +192,7 @@
             onclick={retagLLM}
             disabled={retagBusy}
             title="Re-run LLM description on selected frames (preserves WD14 tags)"
-            class="bg-white/15 hover:bg-white/25 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+            class="bg-teal-500/30 hover:bg-teal-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
           >Describe</button>
         {/if}
         <button

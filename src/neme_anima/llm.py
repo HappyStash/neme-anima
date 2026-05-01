@@ -24,8 +24,13 @@ DEFAULT_PROMPT = (
 DEFAULT_ENDPOINT = "http://localhost:1234"
 
 # Connect quickly so the UI doesn't hang on a typo'd endpoint, but allow
-# generous time for the model itself to think on a long-ish vision prompt.
-_MODELS_TIMEOUT = httpx.Timeout(connect=3.0, read=10.0, write=5.0, pool=5.0)
+# generous time for the server to actually answer. `/v1/models` looks like
+# it should be instantaneous, but LMStudio in particular sometimes blocks
+# on it for many seconds while it's loading or enumerating GGUFs — a
+# 10-second read window led to spurious "timed out" errors against LAN
+# hosts that were just slow to wake up. 60s is plenty without making a
+# typo'd hostname feel hung (the connect leg is what catches that).
+_MODELS_TIMEOUT = httpx.Timeout(connect=5.0, read=60.0, write=10.0, pool=10.0)
 _DESCRIBE_TIMEOUT = httpx.Timeout(connect=5.0, read=120.0, write=30.0, pool=10.0)
 
 
@@ -54,6 +59,15 @@ def discover_models(endpoint: str, api_key: str | None = None) -> list[str]:
     url = f"{_normalize_endpoint(endpoint)}/v1/models"
     try:
         resp = httpx.get(url, timeout=_MODELS_TIMEOUT, headers=_auth_headers(api_key))
+    except httpx.ConnectTimeout as exc:
+        raise LLMUnavailable(
+            f"could not reach {url}: connection timed out — check the host/port",
+        ) from exc
+    except httpx.ReadTimeout as exc:
+        raise LLMUnavailable(
+            f"{url} accepted the connection but took too long to respond — "
+            "the server is reachable but stuck (often: LMStudio loading models)",
+        ) from exc
     except httpx.HTTPError as exc:
         raise LLMUnavailable(f"could not reach {url}: {exc}") from exc
     if resp.status_code != 200:

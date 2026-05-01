@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from "svelte";
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
 
@@ -128,9 +129,17 @@
     // Empty saved prompt = "use the default", so show the default text in
     // the editor instead of a blank box; non-empty = user-customized.
     llmPrompt = llm.prompt || DEFAULT_LLM_PROMPT;
-    if (llm.model && !llmModelsAvailable.includes(llm.model)) {
-      llmModelsAvailable = [llm.model];
-    }
+    // Seed the dropdown with the saved model so it has at least one option
+    // before the user clicks Discover. Untracked so this effect's only
+    // dependency is `projectsStore.active` — without that, mutating
+    // llmModelsAvailable from discoverLLMModels() would re-fire the
+    // effect and slam llmEndpoint back to the project's stored value,
+    // wiping the URL the user just typed.
+    untrack(() => {
+      if (llm.model && !llmModelsAvailable.includes(llm.model)) {
+        llmModelsAvailable = [llm.model];
+      }
+    });
   });
 
   // Toggle is gated on having picked a model — avoids the "enabled but no

@@ -5,9 +5,12 @@ from __future__ import annotations
 import asyncio
 import io
 import json
+import logging
 import re
 import secrets
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -695,6 +698,12 @@ async def upload_frames(
 
     added: list[dict] = []
     skipped: list[str] = []
+    # Last LLM-describe error (if any) is bubbled to the response so the
+    # UI can surface a one-line warning instead of silently writing the
+    # sidecar without line 2. We only keep the most recent message — the
+    # first failure usually identifies the underlying issue (timeout,
+    # auth, wrong model name) and the rest are echoes.
+    llm_error: str | None = None
 
     tagger = _get_or_make_tagger(request)
 
@@ -740,7 +749,22 @@ async def upload_frames(
 
                 try:
                     description = await asyncio.to_thread(_do_describe)
-                except (LLMUnavailable, Exception):
+                except LLMUnavailable as exc:
+                    # Endpoint reachable but unhappy (timeout, bad model id,
+                    # auth refused). Log and remember so the user knows
+                    # *why* their dropped image came back without line 2.
+                    logger.warning(
+                        "upload.describe_failed file=%s: %s",
+                        f.filename or "<unknown>", exc,
+                    )
+                    llm_error = str(exc)
+                    description = ""
+                except Exception as exc:  # noqa: BLE001
+                    logger.exception(
+                        "upload.describe_crashed file=%s",
+                        f.filename or "<unknown>",
+                    )
+                    llm_error = f"{type(exc).__name__}: {exc}"
                     description = ""
             png_path.with_suffix(".txt").write_text(
                 join_sidecar(tag_text, description), encoding="utf-8",
@@ -766,4 +790,4 @@ async def upload_frames(
         finally:
             await f.close()
 
-    return {"added": added, "skipped": skipped}
+    return {"added": added, "skipped": skipped, "llm_error": llm_error}

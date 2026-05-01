@@ -270,7 +270,14 @@ export const uploadFrames = async (slug: string, files: File[]) => {
     try { detail = await resp.json(); } catch { /* body not JSON */ }
     throw new ApiError(resp.status, detail);
   }
-  return resp.json() as Promise<{ added: FrameRecord[]; skipped: string[] }>;
+  return resp.json() as Promise<{
+    added: FrameRecord[];
+    skipped: string[];
+    /** Set when LLM tagging is enabled but `describe_image` failed for at
+     *  least one file — the upload itself succeeded, only line 2 is
+     *  missing. UI surfaces this as a one-shot warning. */
+    llm_error: string | null;
+  }>;
 };
 
 // ---- queue ----

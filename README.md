@@ -26,9 +26,14 @@ Detections and tracklets are cached so threshold re-runs skip the slow stages.
 
 ## Requirements
 
-- Linux / WSL2 with CUDA 12.4+
+For the extractor:
+
 - NVIDIA GPU, 16 GB VRAM minimum, 24 GB comfortable
-- Python 3.11
+
+For the trainer:
+
+- Linux / WSL2 with CUDA 12.4+
+- NVIDIA GPU, 4 GB VRAM minimum, 8 GB comfortable
 
 ## Install
 
