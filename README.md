@@ -35,19 +35,34 @@ For the trainer:
 - Linux / WSL2 with CUDA 12.4+
 - NVIDIA GPU, 6 GB VRAM minimum, 18 GB for full res LoRA
 
-## Install
+## One-click install and run
+
+```sh
+bash install_and_run.sh
+```
+
+The script installs `uv` and Node.js if they aren't already on the system, syncs the Python deps, builds the frontend, clones `tdrussell/diffusion-pipe` into `~/diffusion-pipe` and sets up its venv, downloads the three Anima training weights (~14 GB) from HuggingFace, prefills the four trainer paths in the UI's Settings tab, and starts the server.
+
+Re-running it is safe (will skip anything already in place).
+
+Useful environment overrides:
+
+| Variable | Default | What it does |
+|---|---|---|
+| `DIFFUSION_PIPE_DIR` | `~/diffusion-pipe` | Where to clone diffusion-pipe |
+| `MODELS_DIR` | `~/.cache/neme-anima/models` | Where to put the downloaded weights |
+| `SKIP_MODELS=1` | off | Skip the 14 GB weight download |
+| `SKIP_LAUNCH=1` | off | Install everything, but don't start the UI at the end |
+
+Linux / WSL2 only. On Linux, Node.js is installed through apt (with sudo) when available, and through nvm otherwise.
+
+## Manual install
 
 ```sh
 uv sync --group gpu
 ```
 
 First run downloads ~2.8 GB of weights (anime YOLOv8 person + face, CCIP, isnetis/anime-seg, WD14 with embeddings, CLIP base) to `~/.cache/huggingface/hub/`.
-
-Override the cache location:
-
-```sh
-HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-anima project extract ...
-```
 
 ## CLI
 

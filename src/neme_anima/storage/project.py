@@ -177,6 +177,25 @@ class TrainingConfig:
     # Retention: 0 = keep every checkpoint (the user-requested default).
     keep_last_n_checkpoints: int = 0
 
+    def __post_init__(self) -> None:
+        # Apply install-time prefill defaults for any path field the user
+        # hasn't filled in. install_and_run.sh writes a JSON file at
+        # ~/.neme-anima/training-defaults.json with paths it set up
+        # (diffusion-pipe clone, downloaded model weights). This hook lets
+        # those defaults flow into newly-created projects without having
+        # to teach the UI a separate "global settings" page. Paths that
+        # the user has explicitly filled in are never overridden.
+        defaults_path = Path.home() / ".neme-anima" / "training-defaults.json"
+        if not defaults_path.is_file():
+            return
+        try:
+            globals_ = json.loads(defaults_path.read_text())
+        except (OSError, json.JSONDecodeError):
+            return
+        for key in ("diffusion_pipe_dir", "dit_path", "vae_path", "llm_path"):
+            if not getattr(self, key, "") and globals_.get(key):
+                setattr(self, key, str(globals_[key]))
+
 
 @dataclass
 class Project:
