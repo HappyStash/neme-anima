@@ -1,6 +1,10 @@
 # neme-anima
 
-Pulls character-LoRA training crops out of a video. Give it a clip and one or more reference images of an anime character; it returns rectangular crops of just that character, sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL).
+Pulls character-LoRA training crops out of a video. Give it a clip and reference images of an anime character; it returns rectangular crops of just that character, sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL).
+
+The frame extractor and tagger are model-agnostic. The bundled LoRA trainer is wired for Anima.
+
+![Result with a Chie LoRA applied to Anima](docs/chie.png)
 
 ## Pipeline
 
@@ -73,10 +77,27 @@ uv run neme-anima ui
 
 Binds to `127.0.0.1:<random-port>` and opens the Svelte SPA. Tabs: Sources, Frames, Training, Settings.
 
-- **Sources** — add MKV/MP4 videos and reference images, opt out of refs per video, run extraction.
-- **Frames** — hover thumbnails for tag overlay; click pills to edit inline. Shift-click ranges, Ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Bulk regex replace with live preview.
-- **Training** — LoRA training run with stop/resume and checkpoint retention.
-- **Settings** — per-project threshold overrides (frame stride, identification distance, crop padding, etc.).
+### Sources
+
+Add MKV/MP4 videos and reference images, opt out of refs per video, run extraction.
+
+![Sources tab](docs/neme-anima_extract.png)
+
+### Frames
+
+Hover thumbnails for the tag overlay; click pills to edit inline. Shift-click ranges, Ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Bulk regex replace with live preview. Model-agnostic — use the crops and tags with any trainer.
+
+![Frames tab](docs/neme-anima_frames.png)
+
+### Training
+
+LoRA training with stop/resume and checkpoint retention. Targets Anima.
+
+![Training tab](docs/neme-anima_train.png)
+
+### Settings
+
+Per-project threshold overrides (frame stride, identification distance, crop padding, etc.).
 
 ## REST API
 
@@ -84,15 +105,7 @@ Binds to `127.0.0.1:<random-port>` and opens the Svelte SPA. Tabs: Sources, Fram
 - WebSocket at `/api/ws` streaming `queue.update` / `job.progress` / `job.frame` / `job.log` / `job.done`
 - Health probe at `/api/health`
 
-```sh
-curl -s http://127.0.0.1:<port>/api/projects | jq
-curl -s -X POST http://127.0.0.1:<port>/api/projects \
-  -H 'Content-Type: application/json' \
-  -d '{"name": "megumin", "folder": "/home/me/projects/megumin"}'
-curl -s -X POST http://127.0.0.1:<port>/api/projects/megumin/sources/0/extract
-```
-
-Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry: names, paths, last-opened timestamps).
+Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry).
 
 ## Performance
 
