@@ -223,34 +223,66 @@ async def stop_training(request: Request, slug: str) -> dict:
 async def resume_training(
     request: Request, slug: str, body: StartBody = StartBody(),
 ) -> dict:
-    """Convenience: start a new run that resumes from the latest checkpoint
-    of the most recent run, unless the body specifies otherwise.
+    """Continue a prior run from its last saved DeepSpeed state.
 
-    Resumes inside the same run directory so checkpoint history is preserved.
+    diffusion-pipe's ``train.py`` resolves ``resume_from_checkpoint`` (string
+    form) as a path *relative to* ``output_dir`` and reads
+    ``<that>/latest`` for the DeepSpeed checkpoint name. Since each launch
+    nests its outputs under a fresh timestamped subdir, the resumable value
+    is the *subdir name*, not an ``epoch{N}``-style checkpoint name. We
+    pick the most recent subdir that has a ``latest`` marker.
+
+    The run wrapper directory is reused, so the resumed run keeps appending
+    checkpoints alongside the prior ones rather than starting a new tree.
     """
     project = _load_or_404(request, slug)
     runs = training_lib.list_runs(project)
     run_name = body.run_dir_name
-    ckpt = body.resume_from_checkpoint
-    if run_name is None or ckpt is None:
+    resume_target = body.resume_from_checkpoint
+    if run_name is None:
         if not runs:
             raise HTTPException(
                 status_code=409,
                 detail="no prior run found to resume from",
             )
-        latest_run = runs[0]
-        latest_ckpt = training_lib.latest_checkpoint(Path(latest_run["path"]))
-        if latest_ckpt is None:
+        run_name = runs[0]["name"]
+    run_dir = project.training_runs_dir / run_name
+    if not run_dir.is_dir():
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown run: {run_name}",
+        )
+    if resume_target is None:
+        resume_target = training_lib.find_resumable_subdir(run_dir)
+        if resume_target is None:
             raise HTTPException(
                 status_code=409,
-                detail=f"latest run {latest_run['name']!r} has no checkpoints to resume from",
+                detail=(
+                    f"run {run_name!r} has no resumable DeepSpeed state — "
+                    f"the trainer never finished its first save."
+                ),
             )
-        run_name = run_name or latest_run["name"]
-        ckpt = ckpt or latest_ckpt.name
+    # Guardrail: refuse to resume into an empty training window. If the
+    # user hasn't raised cfg.epochs since the last save, train.py would
+    # still grind through one more epoch (the loop increments before the
+    # bound check) and save it — wasting GPU time and bloating disk.
+    cps = training_lib.discover_checkpoints(run_dir)
+    last_epoch = max(
+        (c.epoch for c in cps if c.epoch is not None),
+        default=None,
+    )
+    if last_epoch is not None and project.training.epochs <= last_epoch:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"already at epoch {last_epoch} / {project.training.epochs} — "
+                f"raise 'epochs' in Settings before resuming."
+            ),
+        )
     try:
         return await request.app.state.training.start(
             project,
-            resume_from_checkpoint=ckpt,
+            resume_from_checkpoint=resume_target,
             run_dir_name=run_name,
         )
     except RuntimeError as e:
@@ -288,13 +320,22 @@ async def list_checkpoints(
 )
 async def delete_checkpoint(
     request: Request, slug: str, run_name: str, ckpt_name: str,
+    subdir: str = "",
 ) -> Response:
+    """Delete one checkpoint. ``subdir`` is the diffusion-pipe sub-run-dir
+    that nests this checkpoint (empty for direct children of ``run_dir``)."""
     project = _load_or_404(request, slug)
     run_dir = project.training_runs_dir / run_name
     if not run_dir.is_dir():
         raise HTTPException(status_code=404, detail=f"unknown run: {run_name}")
-    target = run_dir / ckpt_name
-    # Guard against path traversal — the resolved target must live under run_dir.
+    # Reject any path-injection — both fields are single name components.
+    if not ckpt_name or "/" in ckpt_name or ckpt_name in (".", ".."):
+        raise HTTPException(status_code=400, detail="invalid checkpoint name")
+    if subdir and ("/" in subdir or subdir in (".", "..")):
+        raise HTTPException(status_code=400, detail="invalid subdir")
+    parent = run_dir / subdir if subdir else run_dir
+    target = parent / ckpt_name
+    # Belt-and-braces: the resolved target must live under run_dir.
     try:
         target.resolve().relative_to(run_dir.resolve())
     except ValueError:
@@ -302,7 +343,7 @@ async def delete_checkpoint(
     if not target.is_dir():
         raise HTTPException(
             status_code=404,
-            detail=f"unknown checkpoint: {ckpt_name}",
+            detail=f"unknown checkpoint: {subdir + '/' if subdir else ''}{ckpt_name}",
         )
     training_lib._rmtree(target)
     return Response(status_code=204)

@@ -123,6 +123,49 @@ async def test_resume_404s_when_no_runs(client, project: Project):
     assert "no prior run" in resp.json()["detail"]
 
 
+async def test_resume_409s_when_already_at_target_epochs(
+    client, project: Project,
+):
+    """Refuse to resume when cfg.epochs is no higher than the highest saved
+    epoch — otherwise diffusion-pipe would still grind one more epoch."""
+    runs_dir = project.training_runs_dir
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_dir / "20260501-120000-character"
+    run_dir.mkdir()
+    sub = run_dir / "20260501_12-00-01"
+    sub.mkdir()
+    (sub / "latest").write_text("global_step100")
+    ep = sub / "epoch60"
+    ep.mkdir()
+    (ep / "adapter_model.safetensors").write_bytes(b"x")
+    project.training.epochs = 60
+    project.save()
+    resp = await client.post(f"/api/projects/{project.slug}/training/resume")
+    assert resp.status_code == 409
+    detail = resp.json()["detail"].lower()
+    assert "already at epoch" in detail and "60" in detail
+
+
+async def test_resume_409s_when_run_has_no_resumable_state(
+    client, project: Project,
+):
+    """A run wrapper with epoch artifacts but no DeepSpeed ``latest`` file
+    is not resumable — the trainer never made it to its first save."""
+    runs_dir = project.training_runs_dir
+    runs_dir.mkdir(parents=True, exist_ok=True)
+    run_dir = runs_dir / "20260501-120000-character"
+    run_dir.mkdir()
+    sub = run_dir / "20260501_12-00-01"
+    sub.mkdir()
+    # epoch dir but no latest marker.
+    ep = sub / "epoch1"
+    ep.mkdir()
+    (ep / "adapter_model.safetensors").write_bytes(b"x")
+    resp = await client.post(f"/api/projects/{project.slug}/training/resume")
+    assert resp.status_code == 409
+    assert "no resumable" in resp.json()["detail"].lower()
+
+
 async def test_dataset_preview_shape(client, project: Project):
     resp = await client.get(
         f"/api/projects/{project.slug}/training/dataset-preview",

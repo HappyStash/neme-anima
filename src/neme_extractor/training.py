@@ -48,6 +48,10 @@ class CheckpointInfo:
     step: int | None        # parsed global step if encoded
     size_bytes: int         # cumulative size on disk (best-effort)
     modified_at: str        # ISO-8601
+    # Path of the parent directory relative to ``run_dir`` ("" for direct
+    # children). diffusion-pipe writes its checkpoints into a timestamped
+    # subdirectory under our run wrapper, so this is usually non-empty.
+    subdir: str = ""
 
 
 @dataclass
@@ -124,6 +128,20 @@ def validate_for_run(config: TrainingConfig) -> list[str]:
         problems.append(
             f"diffusion-pipe directory does not contain train.py at {train_py}",
         )
+
+    # Pre-flight the launcher binary so we surface a clear UI message instead
+    # of a generic FileNotFoundError out of subprocess_exec at run time.
+    token, resolved = resolve_launcher_binary(config)
+    if token and resolved is None:
+        problems.append(
+            f"launcher binary not found: {token!r}. Install diffusion-pipe "
+            f"dependencies into a venv at "
+            f"'{config.diffusion_pipe_dir or '<diffusion_pipe_dir>'}/.venv' "
+            f"(see its README), or set launcher_override to an absolute "
+            f"path like '/path/to/env/bin/deepspeed --num_gpus=1 "
+            f"train.py --deepspeed --config {{config}}'",
+        )
+
     if not config.resolutions:
         problems.append("at least one training resolution is required")
     if config.epochs <= 0:
@@ -307,6 +325,16 @@ def render_run_toml(
         "",
         _toml_kv("output_dir", str(run_dir.resolve())),
         _toml_kv("dataset", str(dataset_toml_path.resolve())),
+    ]
+    # ``resume_from_checkpoint`` MUST be a top-level key in the TOML — if
+    # we let it fall after a ``[section]`` header, train.py would read it
+    # off the wrong table (and DeepSpeed forwarded it as a kwarg to AdamW,
+    # blowing up with TypeError).
+    if resume_from_checkpoint:
+        lines.append(
+            _toml_kv("resume_from_checkpoint", resume_from_checkpoint),
+        )
+    lines += [
         "",
         # Training settings
         _toml_kv("epochs", cfg.epochs),
@@ -352,13 +380,8 @@ def render_run_toml(
         _toml_kv("betas", cfg.optimizer_betas),
         _toml_kv("weight_decay", cfg.weight_decay),
         _toml_kv("eps", cfg.eps),
+        "",
     ]
-    if resume_from_checkpoint:
-        lines += [
-            "",
-            _toml_kv("resume_from_checkpoint", resume_from_checkpoint),
-        ]
-    lines.append("")
     return "\n".join(lines)
 
 
@@ -499,6 +522,12 @@ def _parse_checkpoint_name(name: str) -> tuple[int | None, int | None]:
 def discover_checkpoints(run_dir: Path) -> list[CheckpointInfo]:
     """List every checkpoint directory under ``run_dir``, oldest first.
 
+    diffusion-pipe creates a per-launch timestamped subdirectory inside
+    ``run_dir`` and writes its ``epoch{N}`` / ``global_step{N}`` checkpoints
+    *there*, not directly in ``run_dir``. We therefore walk both levels: a
+    checkpoint can live as a direct child of ``run_dir`` (legacy / unusual
+    layouts) or one level deeper (the common case).
+
     Sort key: epoch when present, else step, else mtime. This is the order
     the retention pruner uses to decide what to delete.
     """
@@ -506,16 +535,15 @@ def discover_checkpoints(run_dir: Path) -> list[CheckpointInfo]:
     if not run_dir.is_dir():
         return []
     out: list[CheckpointInfo] = []
-    for entry in run_dir.iterdir():
-        if not entry.is_dir():
-            continue
+
+    def _record(entry: Path, rel_subdir: str) -> None:
         epoch, step = _parse_checkpoint_name(entry.name)
         if epoch is None and step is None:
-            continue
+            return
         try:
             stat = entry.stat()
         except OSError:
-            continue
+            return
         out.append(CheckpointInfo(
             name=entry.name,
             path=str(entry.resolve()),
@@ -525,7 +553,25 @@ def discover_checkpoints(run_dir: Path) -> list[CheckpointInfo]:
             modified_at=datetime.fromtimestamp(
                 stat.st_mtime, tz=timezone.utc,
             ).isoformat(),
+            subdir=rel_subdir,
         ))
+
+    # Skip directories we know aren't checkpoints (the staged training
+    # dataset; we'd just waste a sysstat scan walking it).
+    SKIP = {"dataset"}
+    for entry in run_dir.iterdir():
+        if not entry.is_dir() or entry.name in SKIP:
+            continue
+        if _parse_checkpoint_name(entry.name) != (None, None):
+            _record(entry, "")
+            continue
+        # Treat anything else as a candidate diffusion-pipe sub-run-dir.
+        try:
+            for inner in entry.iterdir():
+                if inner.is_dir():
+                    _record(inner, entry.name)
+        except OSError:
+            continue
 
     def _key(c: CheckpointInfo) -> tuple[int, int, str]:
         return (
@@ -536,6 +582,36 @@ def discover_checkpoints(run_dir: Path) -> list[CheckpointInfo]:
 
     out.sort(key=_key)
     return out
+
+
+def find_resumable_subdir(run_dir: Path) -> str | None:
+    """Return the diffusion-pipe sub-run-dir name we can resume from.
+
+    train.py reads ``<output_dir>/<resume_from_checkpoint>/latest`` to find
+    its DeepSpeed state, so the value to pass back to ``train.py`` is *not*
+    a checkpoint name but the timestamped subdirectory created on a prior
+    launch. We pick the most recent subdir that has a ``latest`` file.
+    Returns ``None`` if nothing resumable exists.
+    """
+    run_dir = Path(run_dir)
+    if not run_dir.is_dir():
+        return None
+    candidates: list[tuple[float, str]] = []
+    for entry in run_dir.iterdir():
+        if not entry.is_dir() or entry.name == "dataset":
+            continue
+        latest = entry / "latest"
+        if not latest.is_file():
+            continue
+        try:
+            mtime = latest.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+        candidates.append((mtime, entry.name))
+    if not candidates:
+        return None
+    candidates.sort(reverse=True)
+    return candidates[0][1]
 
 
 def latest_checkpoint(run_dir: Path) -> CheckpointInfo | None:
@@ -620,6 +696,13 @@ def list_runs(project: Project) -> list[dict]:
         if not entry.is_dir():
             continue
         cps = discover_checkpoints(entry)
+        # Split LoRA outputs from DeepSpeed plumbing — the UI shows the
+        # former as artifacts, while the latter only matters for resume.
+        epoch_cps = [c for c in cps if c.epoch is not None]
+        latest_epoch = max(
+            (c.epoch for c in epoch_cps if c.epoch is not None),
+            default=None,
+        )
         try:
             mtime = entry.stat().st_mtime
         except OSError:
@@ -627,8 +710,11 @@ def list_runs(project: Project) -> list[dict]:
         out.append({
             "name": entry.name,
             "path": str(entry.resolve()),
-            "checkpoints": len(cps),
-            "latest_checkpoint": cps[-1].name if cps else None,
+            "checkpoints": len(epoch_cps),
+            "latest_checkpoint": epoch_cps[-1].name if epoch_cps else None,
+            "latest_epoch": latest_epoch,
+            "resumable_subdir": find_resumable_subdir(entry),
+            "total_size_bytes": sum(c.size_bytes for c in cps),
             "modified_at": datetime.fromtimestamp(
                 mtime, tz=timezone.utc,
             ).isoformat() if mtime else "",
@@ -644,6 +730,30 @@ DEFAULT_LAUNCHER_TEMPLATE = (
 )
 
 
+def resolve_launcher_binary(config: TrainingConfig) -> tuple[str, str | None]:
+    """Find the absolute path of the launcher's first token.
+
+    Returns ``(token, resolved_path_or_None)``. We look in the system PATH
+    first, then in ``<diffusion_pipe_dir>/.venv/bin`` and ``venv/bin`` so a
+    user who configured the diffusion-pipe directory and built its venv
+    there doesn't also have to set ``launcher_override`` — the natural
+    install layout just works.
+    """
+    template = (config.launcher_override or "").strip() or DEFAULT_LAUNCHER_TEMPLATE
+    token = next((tok for tok in template.split() if tok), "")
+    if not token:
+        return ("", None)
+    found = shutil.which(token)
+    if found is None and config.diffusion_pipe_dir:
+        dp = Path(config.diffusion_pipe_dir).expanduser()
+        for venv_bin in (dp / ".venv" / "bin", dp / "venv" / "bin"):
+            cand = venv_bin / token
+            if cand.is_file() and os.access(cand, os.X_OK):
+                found = str(cand)
+                break
+    return (token, found)
+
+
 def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
     """Build the argv list to launch the trainer.
 
@@ -651,6 +761,11 @@ def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
     is substituted with the run TOML path; if the template lacks the marker,
     we append it as a final positional arg so a bare ``python train.py``
     style override still works.
+
+    The launcher binary's first token is resolved to an absolute path when
+    possible so the spawned subprocess finds it regardless of the parent
+    process's PATH (e.g. the server is started without the diffusion-pipe
+    venv activated).
     """
     template = (config.launcher_override or "").strip() or DEFAULT_LAUNCHER_TEMPLATE
     sub = template.replace("{config}", str(run_toml.resolve()))
@@ -658,4 +773,9 @@ def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
         sub = f"{sub} {str(run_toml.resolve())}"
     # Naive shell split — good enough for our launcher templates which are
     # space-separated tokens with no embedded quoting.
-    return [tok for tok in sub.split() if tok]
+    argv = [tok for tok in sub.split() if tok]
+    if argv:
+        _, resolved = resolve_launcher_binary(config)
+        if resolved:
+            argv[0] = resolved
+    return argv

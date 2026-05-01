@@ -345,11 +345,12 @@ export const listTrainingCheckpoints = (slug: string, runName: string) =>
   );
 
 export const deleteTrainingCheckpoint = (
-  slug: string, runName: string, ckptName: string,
-) => request<void>(
-  `/api/projects/${encodeURIComponent(slug)}/training/runs/${encodeURIComponent(runName)}/checkpoints/${encodeURIComponent(ckptName)}`,
-  { method: "DELETE" },
-);
+  slug: string, runName: string, ckptName: string, subdir: string = "",
+) => {
+  const url = `/api/projects/${encodeURIComponent(slug)}/training/runs/${encodeURIComponent(runName)}/checkpoints/${encodeURIComponent(ckptName)}`;
+  const qs = subdir ? `?subdir=${encodeURIComponent(subdir)}` : "";
+  return request<void>(url + qs, { method: "DELETE" });
+};
 
 export const deleteTrainingRun = (slug: string, runName: string) =>
   request<void>(

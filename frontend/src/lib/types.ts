@@ -196,6 +196,7 @@ export interface TrainingRunState {
   last_log_line: string;
   resumed_from: string | null;
   stop_requested: boolean;
+  total_epochs: number | null;
 }
 
 export interface TrainingLogLine {
@@ -219,13 +220,21 @@ export interface TrainingCheckpoint {
   step: number | null;
   size_bytes: number;
   modified_at: string;
+  /** Path of the parent directory relative to the run dir, "" if direct. */
+  subdir: string;
 }
 
 export interface TrainingRun {
   name: string;
   path: string;
+  /** Count of epoch-style LoRA outputs (excludes DeepSpeed plumbing). */
   checkpoints: number;
   latest_checkpoint: string | null;
+  /** Highest epoch saved in this run, if any. */
+  latest_epoch: number | null;
+  /** Diffusion-pipe sub-run-dir name we can resume from, if any. */
+  resumable_subdir: string | null;
+  total_size_bytes: number;
   modified_at: string;
 }
 

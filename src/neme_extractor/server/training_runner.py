@@ -74,6 +74,10 @@ class RunState:
     # Flag that the user clicked Stop. Distinguishes voluntary stop from
     # a crash (status=failed).
     stop_requested: bool = False
+    # Snapshot of cfg.epochs at run-launch so the UI can render a progress
+    # bar without having to query the live config (which the user may have
+    # edited mid-run).
+    total_epochs: int | None = None
 
 
 _PROGRESS_PATTERNS = [
@@ -232,6 +236,7 @@ class TrainingManager:
                 status="starting",
                 started_at=datetime.now(timezone.utc).isoformat(),
                 resumed_from=resume_from_checkpoint,
+                total_epochs=project.training.epochs,
             )
             _persist_state(project, self._state)
 
@@ -488,6 +493,7 @@ def _state_to_dict(state: RunState) -> dict:
         "last_log_line": state.last_log_line,
         "resumed_from": state.resumed_from,
         "stop_requested": state.stop_requested,
+        "total_epochs": state.total_epochs,
     }
 
 
@@ -522,6 +528,7 @@ def _load_persisted_state(project: Project) -> RunState | None:
             last_log_line=raw.get("last_log_line", ""),
             resumed_from=raw.get("resumed_from"),
             stop_requested=bool(raw.get("stop_requested", False)),
+            total_epochs=raw.get("total_epochs"),
         )
     except KeyError:
         return None

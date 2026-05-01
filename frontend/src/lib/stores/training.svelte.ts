@@ -130,9 +130,9 @@ class TrainingStore {
     this.log = log.lines.slice(-LOG_MAX);
   }
 
-  async deleteCheckpoint(runName: string, ckptName: string) {
+  async deleteCheckpoint(runName: string, ckptName: string, subdir: string = "") {
     if (!this.slug) return;
-    await api.deleteTrainingCheckpoint(this.slug, runName, ckptName);
+    await api.deleteTrainingCheckpoint(this.slug, runName, ckptName, subdir);
     await this.refreshRuns();
   }
 

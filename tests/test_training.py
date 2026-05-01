@@ -67,6 +67,9 @@ def test_validate_for_run_passes_when_paths_resolve(
     cfg.dit_path = str(dit)
     cfg.vae_path = str(vae)
     cfg.llm_path = str(llm)
+    # Default launcher uses `deepspeed`, which isn't necessarily on the test
+    # host's PATH. Override with a binary we know exists.
+    cfg.launcher_override = "/bin/sh -c true {config}"
     assert training.validate_for_run(cfg) == []
 
 
@@ -144,6 +147,30 @@ def test_render_run_toml_includes_resume_flag(project: Project, tmp_path: Path):
         resume_from_checkpoint="epoch20",
     )
     assert 'resume_from_checkpoint = "epoch20"' in text
+
+
+def test_render_run_toml_emits_resume_at_top_level(
+    project: Project, tmp_path: Path,
+):
+    """``resume_from_checkpoint`` must be a top-level key, not nested under a
+    section. If it lands under [optimizer] (the previous bug), DeepSpeed
+    forwards it to AdamW as a kwarg and training crashes with TypeError."""
+    import tomllib
+    project.training.dit_path = str(tmp_path / "dit.bin")
+    project.training.vae_path = str(tmp_path / "vae.bin")
+    project.training.llm_path = str(tmp_path / "llm.bin")
+    text = training.render_run_toml(
+        project,
+        run_dir=tmp_path / "run",
+        dataset_toml_path=tmp_path / "ds.toml",
+        resume_from_checkpoint="20260501_11-51-58",
+    )
+    parsed = tomllib.loads(text)
+    assert parsed.get("resume_from_checkpoint") == "20260501_11-51-58"
+    # Sanity: not bleeding into any subsection.
+    for section in ("optimizer", "adapter", "model"):
+        if section in parsed:
+            assert "resume_from_checkpoint" not in parsed[section]
 
 
 def test_run_toml_quotes_paths_with_special_chars(
@@ -275,7 +302,9 @@ def test_build_dataset_staging_counts_missing_txt(
 def test_default_launcher_argv(project: Project, tmp_path: Path):
     run_toml = tmp_path / "run.toml"
     argv = training.build_launcher_argv(project.training, run_toml=run_toml)
-    assert argv[0] == "deepspeed"
+    # First token is the launcher binary, possibly resolved to an absolute
+    # path if 'deepspeed' is in PATH or the diffusion-pipe venv.
+    assert argv[0].endswith("deepspeed")
     assert "--num_gpus=1" in argv
     assert str(run_toml.resolve()) in argv
 
@@ -283,19 +312,39 @@ def test_default_launcher_argv(project: Project, tmp_path: Path):
 def test_launcher_override_with_placeholder(
     project: Project, tmp_path: Path,
 ):
-    project.training.launcher_override = "python wrapper.py {config}"
+    # Use a binary we know exists at a stable path so the resolution is
+    # deterministic across hosts.
+    project.training.launcher_override = "/bin/sh wrapper.py {config}"
     run_toml = tmp_path / "run.toml"
     argv = training.build_launcher_argv(project.training, run_toml=run_toml)
-    assert argv == ["python", "wrapper.py", str(run_toml.resolve())]
+    assert argv == ["/bin/sh", "wrapper.py", str(run_toml.resolve())]
 
 
 def test_launcher_override_without_placeholder_appends(
     project: Project, tmp_path: Path,
 ):
-    project.training.launcher_override = "python wrapper.py"
+    project.training.launcher_override = "/bin/sh wrapper.py"
     run_toml = tmp_path / "run.toml"
     argv = training.build_launcher_argv(project.training, run_toml=run_toml)
-    assert argv == ["python", "wrapper.py", str(run_toml.resolve())]
+    assert argv == ["/bin/sh", "wrapper.py", str(run_toml.resolve())]
+
+
+def test_launcher_resolves_via_diffusion_pipe_venv(
+    project: Project, tmp_path: Path,
+):
+    """A binary in <diffusion_pipe_dir>/.venv/bin should be discovered even
+    when not on the system PATH."""
+    dp = tmp_path / "dp"
+    venv_bin = dp / ".venv" / "bin"
+    venv_bin.mkdir(parents=True)
+    fake = venv_bin / "fake-launcher"
+    fake.write_text("#!/bin/sh\nexit 0\n")
+    fake.chmod(0o755)
+    project.training.diffusion_pipe_dir = str(dp)
+    project.training.launcher_override = "fake-launcher {config}"
+    run_toml = tmp_path / "run.toml"
+    argv = training.build_launcher_argv(project.training, run_toml=run_toml)
+    assert argv[0] == str(fake)
 
 
 # ----- checkpoint discovery + retention -------------------------------------
@@ -337,6 +386,72 @@ def test_discover_checkpoints_ignores_non_ckpt_dirs(tmp_path: Path):
     (run_dir / "config.json").write_text("{}")
     cps = training.discover_checkpoints(run_dir)
     assert [c.name for c in cps] == ["epoch1"]
+
+
+def test_discover_checkpoints_finds_nested_diffusion_pipe_layout(tmp_path: Path):
+    """diffusion-pipe writes its checkpoints into a per-launch timestamped
+    subdirectory under ``output_dir``, not directly into ``output_dir``."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    sub = run_dir / "20260501_11-51-58"
+    sub.mkdir()
+    _make_ckpt(sub, "epoch10")
+    _make_ckpt(sub, "epoch20")
+    _make_ckpt(sub, "global_step720")
+    cps = training.discover_checkpoints(run_dir)
+    assert {c.name for c in cps} == {"epoch10", "epoch20", "global_step720"}
+    for c in cps:
+        assert c.subdir == "20260501_11-51-58"
+        assert str(sub) in c.path
+
+
+def test_discover_checkpoints_skips_dataset_dir(tmp_path: Path):
+    """The staged training dataset lives under run_dir/dataset/ and must
+    never be treated as a checkpoint container."""
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    (run_dir / "dataset").mkdir()
+    # If we were to recurse here we'd find nothing, but we still want to
+    # avoid the wasted scan: just assert no spurious checkpoints surface.
+    sub = run_dir / "20260501_11-51-58"
+    sub.mkdir()
+    _make_ckpt(sub, "epoch1")
+    cps = training.discover_checkpoints(run_dir)
+    assert [c.name for c in cps] == ["epoch1"]
+
+
+def test_find_resumable_subdir_returns_subdir_with_latest_marker(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    sub = run_dir / "20260501_11-51-58"
+    sub.mkdir()
+    (sub / "latest").write_text("global_step720")
+    assert training.find_resumable_subdir(run_dir) == "20260501_11-51-58"
+
+
+def test_find_resumable_subdir_picks_most_recent(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    older = run_dir / "20260501_11-51-58"
+    older.mkdir()
+    (older / "latest").write_text("global_step100")
+    newer = run_dir / "20260501_14-22-10"
+    newer.mkdir()
+    newer_latest = newer / "latest"
+    newer_latest.write_text("global_step200")
+    # Force mtime ordering so the assertion is robust on fast filesystems.
+    import os, time
+    os.utime(older / "latest", (time.time() - 60, time.time() - 60))
+    assert training.find_resumable_subdir(run_dir) == "20260501_14-22-10"
+
+
+def test_find_resumable_subdir_none_when_no_latest(tmp_path: Path):
+    run_dir = tmp_path / "run"
+    run_dir.mkdir()
+    sub = run_dir / "20260501_11-51-58"
+    sub.mkdir()
+    # No 'latest' marker = nothing to resume from.
+    assert training.find_resumable_subdir(run_dir) is None
 
 
 def test_prune_keeps_all_when_zero(tmp_path: Path):
