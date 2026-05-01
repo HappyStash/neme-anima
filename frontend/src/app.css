@@ -15,6 +15,35 @@
   .gradient-accent {
     @apply bg-gradient-to-br from-accent-500 to-violet2-500;
   }
+
+  /* Toggle chip — used for any small "pick one of N options" or
+     "on/off" pill in the dark UI (preset chips, resolution buckets,
+     etc.). The active state has to read clearly at a glance: a
+     saturated indigo fill, white text, plus a thin outer ring so the
+     chip looks "raised" against the ink-900 cards it sits in. The
+     inactive state keeps the muted dark fill but adds a 1px border so
+     its boundary is always visible — which fixes the previous bug
+     where the active variant referenced an undefined accent-700 shade,
+     making the chip's bg fall through to the parent so active and
+     inactive looked identical.
+
+     Usage: .toggle-chip on every option, then add .is-active to the
+     currently-selected one (Svelte's `class:is-active={cond}` is the
+     clean way to wire it). */
+  .toggle-chip {
+    @apply px-3 py-1 text-xs rounded transition-all
+           bg-ink-800 text-slate-300 border border-ink-700
+           hover:bg-ink-700 hover:text-slate-100;
+  }
+  .toggle-chip.is-active {
+    @apply bg-accent-500 text-white border-accent-400
+           shadow-[0_0_0_1px_rgba(129,140,248,0.45),0_2px_8px_rgba(99,102,241,0.35)]
+           hover:bg-accent-500;
+  }
+  .toggle-chip:disabled,
+  .toggle-chip[disabled] {
+    @apply opacity-40 cursor-not-allowed;
+  }
 }
 
 @keyframes badge-pop {

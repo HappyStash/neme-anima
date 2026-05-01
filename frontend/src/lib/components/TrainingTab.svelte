@@ -904,7 +904,8 @@
               <button
                 type="button"
                 onclick={() => applyPreset(p)}
-                class="px-3 py-1 text-xs rounded {cfg.preset === p ? 'bg-accent-700 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}"
+                class="toggle-chip"
+                class:is-active={cfg.preset === p}
               >{p}</button>
             {/each}
             <span class="mx-1 text-slate-700" aria-hidden="true">|</span>
@@ -912,7 +913,8 @@
               type="button"
               onclick={toggleLowVram}
               title="Switches to a known-good ≤8 GB VRAM profile (~6.4 GB measured stable on Anima): single 512 bucket, rank 16, 26 of 28 transformer blocks CPU-offloaded (the max), AdamW8bitKahan optimizer (8-bit state), unsloth activation checkpointing. Click again to restore recipe defaults. Orthogonal to style/character — pick that first, then this if needed."
-              class="px-3 py-1 text-xs rounded {isLowVramActive(cfg) ? 'bg-accent-700 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}"
+              class="toggle-chip"
+              class:is-active={isLowVramActive(cfg)}
             >Fit in 8 GB</button>
           </div>
         </div>
@@ -1108,7 +1110,8 @@
               <button
                 type="button"
                 onclick={() => pickResolutionPreset(p.values)}
-                class="px-3 py-1 text-xs rounded {cfg.resolutions.join(",") === p.values.join(",") ? 'bg-accent-700 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}"
+                class="toggle-chip"
+                class:is-active={cfg.resolutions.join(",") === p.values.join(",")}
               >{p.label}</button>
             {/each}
           </div>
