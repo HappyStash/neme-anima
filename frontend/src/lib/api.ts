@@ -136,10 +136,18 @@ export const removeRef = (slug: string, path: string) =>
 
 export const listFrames = (
   slug: string,
-  opts: { source?: string; offset?: number; limit?: number } = {},
+  opts: {
+    source?: string;
+    /** Whitespace-separated tag substrings; tokens prefixed with `~` negate.
+     *  Server-side filter so large grids stay paginated by what matched. */
+    query?: string;
+    offset?: number;
+    limit?: number;
+  } = {},
 ) => {
   const q = new URLSearchParams();
   if (opts.source) q.set("source", opts.source);
+  if (opts.query) q.set("query", opts.query);
   if (opts.offset !== undefined) q.set("offset", String(opts.offset));
   if (opts.limit !== undefined) q.set("limit", String(opts.limit));
   const qs = q.toString();
@@ -218,9 +226,10 @@ export const bulkRetagLLM = (slug: string, filenames: string[]) =>
 
 // ---- llm ----
 
-export const discoverLLMModels = (endpoint: string) =>
+export const discoverLLMModels = (endpoint: string, apiKey: string = "") =>
   request<{ models: string[] }>(`/api/llm/discover-models`, {
-    method: "POST", body: JSON.stringify({ endpoint }),
+    method: "POST",
+    body: JSON.stringify({ endpoint, api_key: apiKey }),
   });
 
 export const frameImageUrl = (slug: string, filename: string) =>

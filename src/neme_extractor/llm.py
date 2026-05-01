@@ -37,11 +37,23 @@ def _normalize_endpoint(endpoint: str) -> str:
     return endpoint.rstrip("/")
 
 
-def discover_models(endpoint: str) -> list[str]:
+def _auth_headers(api_key: str | None) -> dict[str, str]:
+    """Return Bearer-auth headers when an API key is set, else an empty dict.
+
+    LMStudio (the default target) doesn't gate either endpoint — sending an
+    Authorization header is harmless but emitting one only when needed keeps
+    server-side logs clean and avoids confusing intermediaries.
+    """
+    if api_key and api_key.strip():
+        return {"Authorization": f"Bearer {api_key.strip()}"}
+    return {}
+
+
+def discover_models(endpoint: str, api_key: str | None = None) -> list[str]:
     """Return the model IDs the endpoint exposes via ``GET /v1/models``."""
     url = f"{_normalize_endpoint(endpoint)}/v1/models"
     try:
-        resp = httpx.get(url, timeout=_MODELS_TIMEOUT)
+        resp = httpx.get(url, timeout=_MODELS_TIMEOUT, headers=_auth_headers(api_key))
     except httpx.HTTPError as exc:
         raise LLMUnavailable(f"could not reach {url}: {exc}") from exc
     if resp.status_code != 200:
@@ -76,6 +88,7 @@ def describe_image(
     image_path: Path,
     prompt: str = DEFAULT_PROMPT,
     danbooru_tags: str | None = None,
+    api_key: str | None = None,
 ) -> str:
     """Send the image to ``/v1/chat/completions`` and return the description text.
 
@@ -104,7 +117,10 @@ def describe_image(
         "max_tokens": 200,
     }
     try:
-        resp = httpx.post(url, json=body, timeout=_DESCRIBE_TIMEOUT)
+        resp = httpx.post(
+            url, json=body, timeout=_DESCRIBE_TIMEOUT,
+            headers=_auth_headers(api_key),
+        )
     except httpx.HTTPError as exc:
         raise LLMUnavailable(f"could not reach {url}: {exc}") from exc
     if resp.status_code != 200:

@@ -19,7 +19,10 @@
   $effect(() => {
     const slug = projectsStore.active?.slug;
     if (slug) {
-      framesStore.refresh(slug, viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {});
+      framesStore.refresh(slug, {
+        source: viewStore.sourceFilter ?? undefined,
+        query: viewStore.tagQuery || undefined,
+      });
     }
   });
 
@@ -43,7 +46,10 @@
   async function refreshFramesAfterCrop() {
     const slug = projectsStore.active?.slug;
     if (slug) {
-      await framesStore.refresh(slug, viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {});
+      await framesStore.refresh(slug, {
+        source: viewStore.sourceFilter ?? undefined,
+        query: viewStore.tagQuery || undefined,
+      });
     }
   }
 
@@ -95,10 +101,10 @@
 
     try {
       await api.uploadFrames(slug, images);
-      await framesStore.refresh(
-        slug,
-        viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {},
-      );
+      await framesStore.refresh(slug, {
+        source: viewStore.sourceFilter ?? undefined,
+        query: viewStore.tagQuery || undefined,
+      });
     } catch (e) {
       console.error("upload failed", e);
       alert("Upload failed — see console for details.");

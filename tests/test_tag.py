@@ -77,6 +77,19 @@ def test_join_sidecar_two_line_when_description_present():
     assert text == "1girl, smile\nA young woman smiling.\n"
 
 
+def test_join_sidecar_dedupes_tags():
+    """Duplicate tags from a manual edit collapse the keyed `each` in the
+    frontend, hiding the row entirely. join_sidecar is the single chokepoint
+    for sidecar writes, so dedupe lives here."""
+    text = join_sidecar("1girl, smile, 1girl, blue_hair, smile", "")
+    assert text == "1girl, smile, blue_hair\n"
+
+
+def test_join_sidecar_strips_blank_tags_and_whitespace():
+    text = join_sidecar("  1girl ,  , smile,,blue_hair  ", "")
+    assert text == "1girl, smile, blue_hair\n"
+
+
 @pytest.mark.gpu
 def test_tag_runs_end_to_end(tmp_path: Path):
     """Triggers a one-time WD14 weights download and runs on a noise image.

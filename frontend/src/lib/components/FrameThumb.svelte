@@ -27,12 +27,23 @@
   // Reset the local override whenever the underlying prop changes — that
   // catches both filename changes (parent swapped the row) and the
   // server-side flag flipping after a list refresh post-bulk-retag.
+  // Also re-runs when either per-filename version counter ticks so the
+  // cached sidecar gets dropped after a WD14 retag *or* an LLM describe
+  // finishes — the FrameRecord doesn't change for in-place rewrites, only
+  // the .txt does, and the badge tooltip reads from this cache.
   $effect(() => {
     void frame.filename;
     void frame.has_description;
+    void framesStore.retaggedVersion.get(frame.filename);
+    void framesStore.describedVersion.get(frame.filename);
     hasDescriptionLocal = null;
     tagText = null; // force a fresh tag fetch on next hover
   });
+
+  // Frames currently in flight for a bulk re-tag / re-describe — render a
+  // spinner overlay and swallow clicks so the user can't kick off a preview
+  // or toggle selection on a tile that's actively being written to.
+  let processing = $derived(framesStore.processing.has(frame.filename));
 
   // A sentinel value that, when present in `pills`, renders as the empty
   // editable placeholder created by the "+" button. Picked to be impossible
@@ -103,20 +114,35 @@
     const next = description
       ? `${nextDanbooru}\n${description}`
       : nextDanbooru;
-    await api.putTags(slug, frame.filename, next);
-    tagText = next;
+    // Use the server's response so any normalization the route applied
+    // (dedupe, whitespace collapse) flows back into the local cache —
+    // otherwise the next render would still show the raw text we sent.
+    const r = await api.putTags(slug, frame.filename, next);
+    tagText = r.text;
   }
 
   let imageUrl = $derived(
     projectsStore.active ? api.frameImageUrl(projectsStore.active.slug, frame.filename) : "",
   );
 
-  let realPills = $derived(
-    splitSidecar(tagText ?? "")
+  // Dedupe the pill list defensively — the server now normalizes on write,
+  // but pre-existing sidecars may still have duplicates and the keyed
+  // `{#each}` below would otherwise collapse the row (Svelte requires
+  // unique keys; identical tag text breaks the keyed iteration).
+  let realPills = $derived.by(() => {
+    const raw = splitSidecar(tagText ?? "")
       .danbooru.split(",")
       .map((t) => t.trim())
-      .filter(Boolean),
-  );
+      .filter(Boolean);
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const t of raw) {
+      if (seen.has(t)) continue;
+      seen.add(t);
+      out.push(t);
+    }
+    return out;
+  });
 
   // Tooltip text for the top-left "described" badge. Tags get loaded the
   // first time the thumb is hovered (which always happens before/while the
@@ -146,8 +172,18 @@
   }
 
   function addTag(newTag: string) {
-    const next = [...realPills, newTag].join(", ");
     addingTag = false;
+    const trimmed = newTag.trim();
+    if (!trimmed) return;
+    // Always go through the save round-trip — even for an exact duplicate.
+    // The server dedupes in join_sidecar and the response is what we write
+    // back into tagText, so the pill list ends up identical to what was
+    // already there. Skipping the save short-circuited too aggressively in
+    // practice: when the user committed a duplicate, the placeholder was
+    // unmounted without any write firing, and the next render cycle could
+    // leave the keyed `each` out of sync with realPills. The HTTP roundtrip
+    // is cheap; correctness wins.
+    const next = [...realPills, trimmed].join(", ");
     void saveTagsLine(next);
   }
 
@@ -241,6 +277,24 @@
     {frame.video_stem}
   </span>
 
+  <!-- Spinner overlay: covers the whole tile during a bulk re-tag /
+       re-describe. Sits above every other badge (z-30) and absorbs pointer
+       events so the image button underneath can't fire while busy. The dim
+       backdrop is just enough to make the spinner read against any image. -->
+  {#if processing}
+    <div
+      class="absolute inset-0 rounded-lg bg-ink-950/55 backdrop-blur-[1px] flex items-center justify-center z-30"
+      role="status"
+      aria-live="polite"
+      aria-label="Processing frame"
+    >
+      <span
+        class="block w-7 h-7 rounded-full border-2 border-white/25 border-t-accent-500 animate-spin"
+        aria-hidden="true"
+      ></span>
+    </div>
+  {/if}
+
   <!-- Top-RIGHT toggle pill: emerald + checkmark when selected, neutral
        otherwise. Always visible; on top of the image button via z-20. -->
   <button
@@ -298,20 +352,23 @@
           class="px-2 py-0.5 text-[9.5px] leading-none rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/10 transition-colors"
         >+</button>
 
-        <!-- Description pill: same shape, with an inline chat-bubble icon.
-             Tooltip on hover names the action. -->
-        <button
-          type="button"
-          onclick={openDescriptionModal}
-          title={hasDescription ? "Edit description" : "Add description"}
-          aria-label={hasDescription ? "Edit description" : "Add description"}
-          class="px-2 py-0.5 text-[9.5px] leading-none rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/10 transition-colors inline-flex items-center gap-1"
-        >
-          <svg viewBox="0 0 16 16" class="w-2.5 h-2.5" fill="currentColor" aria-hidden="true">
-            <path d="M3 3h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 12H7.4l-3 2.4a.5.5 0 0 1-.8-.4V12H3a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 3 3z"/>
-          </svg>
-          {hasDescription ? "edit" : "describe"}
-        </button>
+        <!-- "describe" pill: only shown when the frame has no description yet.
+             Once a description exists, the top-left badge takes over editing
+             so we don't render two buttons for the same action. -->
+        {#if !hasDescription}
+          <button
+            type="button"
+            onclick={openDescriptionModal}
+            title="Add description"
+            aria-label="Add description"
+            class="px-2 py-0.5 text-[9.5px] leading-none rounded-full bg-white/15 hover:bg-white/25 text-white border border-white/10 transition-colors inline-flex items-center gap-1"
+          >
+            <svg viewBox="0 0 16 16" class="w-2.5 h-2.5" fill="currentColor" aria-hidden="true">
+              <path d="M3 3h10a1.5 1.5 0 0 1 1.5 1.5v6A1.5 1.5 0 0 1 13 12H7.4l-3 2.4a.5.5 0 0 1-.8-.4V12H3a1.5 1.5 0 0 1-1.5-1.5v-6A1.5 1.5 0 0 1 3 3z"/>
+            </svg>
+            describe
+          </button>
+        {/if}
       </div>
     </div>
   {/if}
@@ -321,11 +378,22 @@
   <DescriptionModal
     filename={frame.filename}
     onclose={() => (descriptionModalOpen = false)}
-    onsaved={(text) => {
+    onsaved={async (text) => {
       hasDescriptionLocal = text.trim().length > 0;
-      // Keep tagText (the cached full sidecar) in sync so the badge tooltip
-      // reflects the new description on the next hover. If tags haven't been
-      // loaded yet, leave tagText null — loadTags will fetch fresh.
+      // Refetch the full sidecar from the server so the badge tooltip is
+      // server-truth, regardless of whether the cache had been populated
+      // before the save. Falls back to a local patch if the fetch fails so
+      // we still surface the just-saved text rather than a stale value.
+      const slug = projectsStore.active?.slug;
+      if (slug) {
+        try {
+          const r = await api.getTags(slug, frame.filename);
+          tagText = r.text;
+          return;
+        } catch {
+          // fall through to the local patch
+        }
+      }
       if (tagText !== null) {
         const { danbooru } = splitSidecar(tagText);
         const trimmed = text.trim();

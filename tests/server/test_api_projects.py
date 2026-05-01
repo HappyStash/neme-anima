@@ -102,6 +102,7 @@ async def test_patch_llm_config_persists_and_returns_in_view(
         "endpoint": "http://localhost:1234",
         "model": "",
         "prompt": "",
+        "api_key": "",
     }
 
     # Patch only some fields — others stay untouched.

@@ -28,6 +28,7 @@ class LLMConfigBody(BaseModel):
     endpoint: str | None = None
     model: str | None = None
     prompt: str | None = None
+    api_key: str | None = None
 
 
 class PatchProjectBody(BaseModel):
@@ -173,6 +174,8 @@ async def patch_project(request: Request, slug: str, body: PatchProjectBody) -> 
             project.llm.model = body.llm.model
         if body.llm.prompt is not None:
             project.llm.prompt = body.llm.prompt
+        if body.llm.api_key is not None:
+            project.llm.api_key = body.llm.api_key
     project.save()
     request.app.state.registry.register(project)  # refresh name
     return _project_view(project)

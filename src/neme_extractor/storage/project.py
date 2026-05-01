@@ -76,11 +76,16 @@ class LLMConfig:
     :func:`neme_extractor.llm.discover_models`. The pipeline treats
     ``enabled=False`` *or* ``model==""`` as off, so the disabled-by-default
     behaviour falls out without an extra check.
+
+    ``api_key`` is empty by default — LMStudio doesn't require auth. Set it
+    when targeting providers that gate ``/v1/models`` and ``/v1/chat/completions``
+    behind a bearer token (OpenAI, OpenRouter, hosted vLLM, etc.).
     """
     enabled: bool = False
     endpoint: str = "http://localhost:1234"
     model: str = ""
     prompt: str = ""  # empty = use llm.DEFAULT_PROMPT
+    api_key: str = ""  # empty = no Authorization header (LMStudio default)
 
 
 @dataclass
@@ -217,6 +222,7 @@ class Project:
                 endpoint=str(llm_raw.get("endpoint") or "http://localhost:1234"),
                 model=str(llm_raw.get("model") or ""),
                 prompt=str(llm_raw.get("prompt") or ""),
+                api_key=str(llm_raw.get("api_key") or ""),
             ),
             training=training,
         )

@@ -19,6 +19,9 @@ export interface LLMConfig {
   endpoint: string;
   model: string;
   prompt: string;
+  /** Bearer token for providers that gate /v1/* (OpenAI, OpenRouter, hosted
+   *  vLLM, …). Empty for LMStudio and other unauthenticated local servers. */
+  api_key: string;
 }
 
 export interface ProjectView {
@@ -60,7 +63,11 @@ export interface FrameRecord {
 }
 
 export interface FramesPage {
+  /** Number of items matching the current filter (source + tag query). */
   count: number;
+  /** Count in the current source/kept_only view before the tag query is
+   *  applied — drives the "X / total" badge when a search is active. */
+  total: number;
   items: FrameRecord[];
 }
 

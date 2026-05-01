@@ -107,6 +107,111 @@ async def test_put_tags_overwrites(client, project_with_frames: Project):
     assert txt == "1girl, blue_hair\n"
 
 
+async def test_put_tags_dedupes_on_save(client, project_with_frames: Project):
+    """A duplicate tag from a manual edit broke the keyed tag-pill `each`
+    in the frontend (Svelte requires unique keys); the route routes through
+    join_sidecar so dedupe is applied on every write."""
+    name = "ep01__s000_t001_f000010"
+    resp = await client.put(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/tags",
+        json={"text": "1girl, smile, 1girl, blue_hair, smile"},
+    )
+    assert resp.status_code == 200
+    # Response reflects the deduped text, no trailing newline.
+    assert resp.json()["text"] == "1girl, smile, blue_hair"
+    txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert txt == "1girl, smile, blue_hair\n"
+
+
+async def test_put_tags_preserves_description_line(client, project_with_frames: Project):
+    """A two-line PUT keeps the description intact while still deduping
+    the tag line."""
+    name = "ep01__s000_t001_f000010"
+    resp = await client.put(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/tags",
+        json={"text": "1girl, smile, 1girl\nA caption from the LLM."},
+    )
+    assert resp.status_code == 200
+    txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert txt == "1girl, smile\nA caption from the LLM.\n"
+
+
+async def test_put_tags_preserves_existing_description_on_single_line_body(
+    client, project_with_frames: Project,
+):
+    """A single-line PUT must NOT clobber the on-disk description.
+
+    The frontend's tag-pill add/remove path can race ahead of its lazy
+    hover-fetch of the sidecar — in that window saveTagsLine has nothing
+    to send for line 2 and the body arrives single-line. Treating that
+    as 'delete the description' would silently destroy LLM captions any
+    time the user added or removed a tag before the description had been
+    fetched into memory.
+    """
+    name = "ep01__s000_t001_f000010"
+    # Seed both lines so we can verify line 2 survives.
+    (project_with_frames.kept_dir / f"{name}.txt").write_text(
+        "1girl, smile\nA young woman smiling.\n", encoding="utf-8",
+    )
+    resp = await client.put(
+        f"/api/projects/{project_with_frames.slug}/frames/{name}/tags",
+        json={"text": "1girl, smile, blue_hair"},  # single line, no desc
+    )
+    assert resp.status_code == 200
+    txt = (project_with_frames.kept_dir / f"{name}.txt").read_text(encoding="utf-8")
+    assert txt == "1girl, smile, blue_hair\nA young woman smiling.\n"
+    # Response carries the merged sidecar (post-dedupe, with description).
+    assert resp.json()["text"] == "1girl, smile, blue_hair\nA young woman smiling."
+
+
+async def test_list_frames_filters_by_tag_query(
+    client, project_with_frames: Project,
+):
+    # The fixture seeds two frames with "1girl, smile" sidecars. Rewrite one
+    # so we can prove the filter discriminates on tag content.
+    a = "ep01__s000_t001_f000010"
+    b = "ep02__s000_t001_f000020"
+    (project_with_frames.kept_dir / f"{a}.txt").write_text(
+        "1girl, smile, red_hair\n", encoding="utf-8",
+    )
+    (project_with_frames.kept_dir / f"{b}.txt").write_text(
+        "1girl, frown, blue_hair\n", encoding="utf-8",
+    )
+    base = f"/api/projects/{project_with_frames.slug}/frames"
+
+    # Positive substring: only the frame with "red" matches.
+    resp = await client.get(base, params={"query": "red"})
+    names = sorted(it["filename"] for it in resp.json()["items"])
+    assert names == [a]
+
+    # Negation: ~red excludes that frame.
+    resp = await client.get(base, params={"query": "~red"})
+    names = sorted(it["filename"] for it in resp.json()["items"])
+    assert names == [b]
+
+    # AND across tokens: 1girl AND smile → only frame `a`.
+    resp = await client.get(base, params={"query": "1girl smile"})
+    names = sorted(it["filename"] for it in resp.json()["items"])
+    assert names == [a]
+
+    # Mix of positive and negative: matches frame `b` (has 1girl, no red).
+    resp = await client.get(base, params={"query": "1girl ~red"})
+    names = sorted(it["filename"] for it in resp.json()["items"])
+    assert names == [b]
+
+    # Empty / blank query disables the filter — both frames returned.
+    resp = await client.get(base, params={"query": "   "})
+    assert resp.json()["count"] == 2
+
+    # `total` always reports the unfiltered-by-query count for the current
+    # source/kept_only view, so the UI can render "X / Y" without a second
+    # listFrames roundtrip.
+    resp = await client.get(base, params={"query": "red"})
+    body = resp.json()
+    assert body["count"] == 1
+    assert body["total"] == 2
+
+
 async def test_delete_frame_removes_png_and_txt(client, project_with_frames: Project):
     name = "ep01__s000_t001_f000010"
     resp = await client.delete(f"/api/projects/{project_with_frames.slug}/frames/{name}")
@@ -323,7 +428,9 @@ async def test_bulk_retag_llm_prefers_crop_derivative(
     seen_image_paths: list[Path] = []
     seen_danbooru: list[str | None] = []
 
-    def fake_describe_image(*, endpoint, model, image_path, prompt, danbooru_tags):
+    def fake_describe_image(
+        *, endpoint, model, image_path, prompt, danbooru_tags, api_key=None,
+    ):
         seen_image_paths.append(image_path)
         seen_danbooru.append(danbooru_tags)
         return "Description of the cropped subject."
@@ -383,7 +490,9 @@ async def test_bulk_retag_llm_resolves_crop_filename_to_original(
 
     captured: list[Path] = []
 
-    def fake_describe_image(*, endpoint, model, image_path, prompt, danbooru_tags):
+    def fake_describe_image(
+        *, endpoint, model, image_path, prompt, danbooru_tags, api_key=None,
+    ):
         captured.append(image_path)
         return "ok"
 

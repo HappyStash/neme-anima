@@ -311,7 +311,7 @@
   role="dialog"
   aria-modal="true"
   tabindex="-1"
-  onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onmousedown={(e) => { if (e.target === e.currentTarget) onclose(); }}
   onpointermove={onPointerMove}
   onpointerup={onPointerUp}
 >
@@ -320,7 +320,7 @@
     bind:this={viewportEl}
     role="presentation"
     class="relative max-w-full max-h-full w-full h-full flex items-center justify-center"
-    onclick={(e) => { if (e.target === e.currentTarget) onclose(); }}
+    onmousedown={(e) => { if (e.target === e.currentTarget) onclose(); }}
   >
     {#if displayW > 0 && displayH > 0}
       <div

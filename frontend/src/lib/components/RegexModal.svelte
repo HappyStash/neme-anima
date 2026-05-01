@@ -9,11 +9,58 @@
   let pattern = $state("");
   let replacement = $state("");
   let caseInsensitive = $state(false);
-  let preview = $state<{ before: string; after: string }[]>([]);
+  // Each preview row carries the segment-by-segment split for both the
+  // before and after lines. `match: true` segments are highlighted; the
+  // rest read as plain context. The wrapper renders these inline with
+  // CSS wrap so long tag lines are fully visible without truncation.
+  type Segment = { text: string; match: boolean };
+  let preview = $state<{ before: Segment[]; after: Segment[] }[]>([]);
   let previewError = $state<string | null>(null);
   let applying = $state(false);
 
   let filenames = $derived(framesStore.selectedFilenames());
+
+  /** Walk a single line, splitting it into plain/match segments and
+   *  computing the corresponding after-segments by applying the regex's
+   *  replacement (with $1 etc. resolved) to each matched substring.
+   *  Returns null when the regex didn't match anywhere — that row is
+   *  skipped entirely so the preview only shows lines that change. */
+  function diffLine(text: string, re: RegExp, repl: string):
+    { before: Segment[]; after: Segment[] } | null
+  {
+    // A non-global twin so `replace` resolves `$1`/`$&` etc. on a single
+    // match without iterating again. Cheap to construct per call; the
+    // sample size is capped at 20.
+    const single = new RegExp(re.source, re.flags.replace("g", ""));
+    const before: Segment[] = [];
+    const after: Segment[] = [];
+    let lastIndex = 0;
+    re.lastIndex = 0;
+    let matched = false;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      matched = true;
+      if (m.index > lastIndex) {
+        const plain = text.slice(lastIndex, m.index);
+        before.push({ text: plain, match: false });
+        after.push({ text: plain, match: false });
+      }
+      const replaced = m[0].replace(single, repl);
+      before.push({ text: m[0], match: true });
+      after.push({ text: replaced, match: true });
+      lastIndex = m.index + m[0].length;
+      // Zero-width matches advance lastIndex manually so we don't loop
+      // forever (e.g. pattern `^` or `(?=)`).
+      if (m[0].length === 0) re.lastIndex++;
+    }
+    if (!matched) return null;
+    if (lastIndex < text.length) {
+      const tail = text.slice(lastIndex);
+      before.push({ text: tail, match: false });
+      after.push({ text: tail, match: false });
+    }
+    return { before, after };
+  }
 
   async function refreshPreview() {
     previewError = null;
@@ -27,14 +74,14 @@
       const slug = projectsStore.active?.slug;
       if (!slug) return;
       const sample = filenames.slice(0, 20);
-      const out: { before: string; after: string }[] = [];
+      const out: { before: Segment[]; after: Segment[] }[] = [];
       for (const fn of sample) {
         const t = await api.getTags(slug, fn);
         // The server applies the regex only to the danbooru (first) line.
         // Preview the same way so the user sees the actual diff.
         const firstLine = t.text.split("\n", 1)[0];
-        const after = firstLine.replace(re, replacement);
-        if (after !== firstLine) out.push({ before: firstLine, after });
+        const diff = diffLine(firstLine, re, replacement);
+        if (diff) out.push(diff);
       }
       preview = out;
     } catch (e) {
@@ -52,10 +99,24 @@
     const slug = projectsStore.active?.slug;
     if (!slug || !pattern) return;
     applying = true;
+    // Snapshot the selection before the call: we deselect on success and
+    // we want to bust the thumb tag-cache for the same exact set even if
+    // `filenames` (a derived) shifts mid-apply.
+    const targets = [...filenames];
     try {
       await api.bulkTagsReplace(slug, {
-        filenames, pattern, replacement, case_insensitive: caseInsensitive,
+        filenames: targets,
+        pattern,
+        replacement,
+        case_insensitive: caseInsensitive,
       });
+      // Bump each frame's retag counter so FrameThumb drops its cached
+      // tagText — the FrameRecord doesn't change for a regex replace,
+      // only the on-disk .txt does, so without this the old tags keep
+      // showing on hover. Cheap to bump for unchanged frames too: the
+      // next hover just refetches the same line.
+      for (const fn of targets) framesStore.markRetagged(fn);
+      framesStore.deselect(targets);
       onclose();
     } catch (e) {
       previewError = String(e);
@@ -65,11 +126,16 @@
   }
 </script>
 
-<div class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center" role="dialog" tabindex="-1" onclick={onclose} onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}>
+<div
+  class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
+  role="dialog"
+  tabindex="-1"
+  onmousedown={(e) => { if (e.target === e.currentTarget) onclose(); }}
+  onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}
+>
   <div
     class="bg-ink-900 border border-ink-700 rounded-xl p-5 max-w-xl w-full mx-4 shadow-2xl"
     role="document"
-    onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
     <h2 class="text-lg font-semibold mb-1">Bulk regex tag replace</h2>
@@ -112,9 +178,28 @@
       {:else}
         <p class="text-slate-500 mb-2">{preview.length} of first 20 will change:</p>
         {#each preview as p}
-          <div class="mb-1.5">
-            <p class="text-slate-500 truncate"><span class="text-red-400">−</span> {p.before}</p>
-            <p class="text-emerald-400 truncate">+ {p.after}</p>
+          <!-- whitespace-pre-wrap + break-words: long tag lines wrap onto
+               multiple lines instead of getting truncated, so the changed
+               segment is always visible. The surrounding plain context
+               renders dim while the matched/replacement segments get a
+               solid background — quick eye-catch for "what changed". -->
+          <div class="mb-2 leading-snug">
+            <p class="text-slate-500 whitespace-pre-wrap break-words">
+              <span class="text-red-400 select-none">−&nbsp;</span>
+              {#each p.before as seg}
+                {#if seg.match}
+                  <span class="bg-red-500/30 text-red-200 rounded px-0.5">{seg.text}</span>
+                {:else}{seg.text}{/if}
+              {/each}
+            </p>
+            <p class="text-slate-500 whitespace-pre-wrap break-words">
+              <span class="text-emerald-400 select-none">+&nbsp;</span>
+              {#each p.after as seg}
+                {#if seg.match}
+                  <span class="bg-emerald-500/25 text-emerald-200 rounded px-0.5">{seg.text}</span>
+                {:else}{seg.text}{/if}
+              {/each}
+            </p>
           </div>
         {/each}
       {/if}

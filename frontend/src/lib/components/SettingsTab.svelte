@@ -100,6 +100,11 @@
     projectsStore.active?.llm?.endpoint || "http://localhost:1234",
   );
   let llmModel = $state<string>(projectsStore.active?.llm?.model ?? "");
+  // Optional bearer token. LMStudio doesn't need one — the input is left blank
+  // by default — but OpenAI/OpenRouter/hosted vLLM do. Stored as plain text
+  // in project.json (same trust boundary as the rest of the project config).
+  let llmApiKey = $state<string>(projectsStore.active?.llm?.api_key ?? "");
+  let llmApiKeyVisible = $state<boolean>(false);
   // If the project hasn't customized the prompt, surface the default so the
   // user has something to edit rather than a blank textarea — they can save
   // it verbatim or customize.
@@ -119,6 +124,7 @@
     llmEnabled = llm.enabled;
     llmEndpoint = llm.endpoint || "http://localhost:1234";
     llmModel = llm.model || "";
+    llmApiKey = llm.api_key || "";
     // Empty saved prompt = "use the default", so show the default text in
     // the editor instead of a blank box; non-empty = user-customized.
     llmPrompt = llm.prompt || DEFAULT_LLM_PROMPT;
@@ -137,7 +143,7 @@
     llmDiscoverError = null;
     llmDiscoverOk = false;
     try {
-      const resp = await api.discoverLLMModels(llmEndpoint.trim());
+      const resp = await api.discoverLLMModels(llmEndpoint.trim(), llmApiKey.trim());
       llmModelsAvailable = resp.models;
       llmDiscoverOk = true;
       // If the previously-saved model isn't in the new list, blank it so the
@@ -174,6 +180,7 @@
           // upstream changes to DEFAULT_PROMPT take effect automatically
           // for projects that never edited the prompt.
           prompt: llmPrompt === DEFAULT_LLM_PROMPT ? "" : llmPrompt,
+          api_key: llmApiKey.trim(),
         },
       });
       await projectsStore.load(slug);
@@ -280,6 +287,27 @@
         class="px-3 py-1.5 text-xs rounded bg-ink-800 hover:bg-ink-700 text-slate-200 border border-ink-700 disabled:opacity-40 disabled:cursor-not-allowed"
       >{llmDiscovering ? "Probing…" : "Discover models"}</button>
     </div>
+
+    <label class="block mb-3">
+      <span class="flex items-center justify-between">
+        <span class="text-[10px] uppercase tracking-wide text-slate-500">
+          API key <span class="text-slate-600 normal-case tracking-normal">(optional — leave blank for LMStudio)</span>
+        </span>
+        <button
+          type="button"
+          onclick={() => (llmApiKeyVisible = !llmApiKeyVisible)}
+          class="text-[10px] text-slate-500 hover:text-slate-300"
+        >{llmApiKeyVisible ? "hide" : "show"}</button>
+      </span>
+      <input
+        bind:value={llmApiKey}
+        type={llmApiKeyVisible ? "text" : "password"}
+        autocomplete="off"
+        spellcheck="false"
+        placeholder="sk-… (only needed for OpenAI / OpenRouter / hosted vLLM)"
+        class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded text-sm font-mono focus:outline-none focus:border-accent-500"
+      />
+    </label>
 
     {#if llmDiscoverError}
       <p class="text-xs text-red-400 mb-2 break-all">{llmDiscoverError}</p>

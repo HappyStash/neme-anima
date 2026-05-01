@@ -37,13 +37,12 @@
   class="fixed inset-0 bg-black/60 z-40 flex items-center justify-center"
   role="dialog"
   tabindex="-1"
-  onclick={onclose}
+  onmousedown={(e) => { if (e.target === e.currentTarget) onclose(); }}
   onkeydown={(e) => { if (e.key === 'Escape') onclose(); }}
 >
   <div
     class="bg-ink-900 border border-ink-700 rounded-xl p-5 max-w-md w-full mx-4 shadow-2xl"
     role="document"
-    onclick={(e) => e.stopPropagation()}
     onkeydown={(e) => e.stopPropagation()}
   >
     <h2 class="text-lg font-semibold mb-4">New project</h2>

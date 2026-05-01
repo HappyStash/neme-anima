@@ -45,11 +45,20 @@
   });
 
   function commit(ev: KeyboardEvent | FocusEvent) {
+    // Idempotency guard: pressing Enter triggers onkeydown=commit, which
+    // flips editing=false; the input then loses focus as Svelte unmounts
+    // it, firing onblur=commit a second time. Without this guard onreplace
+    // would fire twice (double-save) and, more importantly, the second
+    // call could race with the parent's render cycle and corrupt the
+    // pill list. Both callers route through editing=false on success, so
+    // checking it is the cheapest way to dedupe the call.
+    if (!editing) return;
     if (ev instanceof KeyboardEvent && ev.key === "Escape") {
       ev.preventDefault();
       // Escape on a placeholder = discard. Escape on an existing pill =
       // revert and exit edit mode without saving.
       if (text === "" && oncancel) {
+        editing = false;
         oncancel();
         return;
       }

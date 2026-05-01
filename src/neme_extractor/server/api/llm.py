@@ -14,6 +14,9 @@ router = APIRouter(prefix="/api/llm", tags=["llm"])
 
 class DiscoverBody(BaseModel):
     endpoint: str
+    # Optional bearer token — empty/missing means "unauthenticated", which is
+    # the LMStudio default. Required for OpenAI / OpenRouter / hosted vLLM.
+    api_key: str | None = None
 
 
 @router.post("/discover-models")
@@ -25,7 +28,9 @@ async def discover_models_endpoint(body: DiscoverBody) -> dict:
     if not body.endpoint or not body.endpoint.strip():
         raise HTTPException(status_code=422, detail="endpoint is required")
     try:
-        models = await asyncio.to_thread(discover_models, body.endpoint.strip())
+        models = await asyncio.to_thread(
+            discover_models, body.endpoint.strip(), body.api_key,
+        )
     except LLMUnavailable as exc:
         raise HTTPException(status_code=422, detail=str(exc))
     return {"models": models}

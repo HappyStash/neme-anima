@@ -88,14 +88,39 @@ def split_sidecar(text: str) -> tuple[str, str]:
     return danbooru, description
 
 
+def _dedupe_tags(danbooru: str) -> str:
+    """Trim, drop blanks, and remove duplicate tags preserving first-occurrence order.
+
+    Centralized in :func:`join_sidecar` so every sidecar write normalizes the
+    danbooru line once, regardless of who produced it (auto-tagger, manual
+    pill edit, regex replace, LLM retag). Two reasons:
+
+    * The frontend's keyed ``{#each}`` over tag pills uses tag text as the
+      key — duplicates collapse the rendered list and the user sees the row
+      go blank after committing a repeat.
+    * Duplicate tags add no signal for the trainer; they just inflate tokens.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    for raw in danbooru.split(","):
+        t = raw.strip()
+        if not t or t in seen:
+            continue
+        seen.add(t)
+        out.append(t)
+    return ", ".join(out)
+
+
 def join_sidecar(danbooru: str, description: str) -> str:
     """Render ``(danbooru, description)`` back into the two-line sidecar form.
 
     Always trailing-newline terminated for POSIX-friendly diffs. An empty
     description collapses to a single line so files written before LLM
-    tagging existed stay byte-identical when round-tripped.
+    tagging existed stay byte-identical when round-tripped. The danbooru
+    line is also deduped here — it's the single chokepoint every sidecar
+    write goes through.
     """
-    danbooru = danbooru.rstrip()
+    danbooru = _dedupe_tags(danbooru)
     description = description.strip()
     if description:
         return f"{danbooru}\n{description}\n"

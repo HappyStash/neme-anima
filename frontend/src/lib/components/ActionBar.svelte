@@ -14,6 +14,11 @@
 
   let onFramesTab = $derived(viewStore.tab === "frames");
   let total = $derived(framesStore.items.length);
+  // When a tag query is active, the count badge renders "X / Y" — Y is the
+  // unfiltered count for the current source/kept_only view, served by the
+  // backend alongside the filtered list.
+  let totalInView = $derived(framesStore.totalInView);
+  let queryActive = $derived(viewStore.tagQuery.trim().length > 0);
   let allSelected = $derived(count > 0 && count === total);
 
   // The LLM-retag button only renders when the project has a model picked —
@@ -39,17 +44,32 @@
     const filenames = framesStore.selectedFilenames();
     if (filenames.length === 0) return;
     retagBusy = true;
+    // Mark every selected frame as in-flight up-front so tiles that haven't
+    // been reached yet still show a spinner (queued state). Each per-frame
+    // call clears its own filename when it resolves and the frame is
+    // deselected — a successful frame visibly drains out of the selection
+    // pill while failures stay selected as a retry hint.
+    framesStore.markProcessing(filenames);
     try {
-      const res = await api.bulkRetagDanbooru(slug, filenames);
-      // Refresh so the on-hover tag preview reads the new WD14 output rather
-      // than serving the now-stale cached text from each FrameThumb.
-      await framesStore.refresh(
-        slug,
-        viewStore.sourceFilter ? { source: viewStore.sourceFilter } : {},
-      );
-      alert(`Re-tagged ${res.retagged} of ${res.total} frame${res.total === 1 ? "" : "s"}.`);
-    } catch (e) {
-      alert(`Re-tag failed: ${e instanceof Error ? e.message : String(e)}`);
+      for (const filename of filenames) {
+        try {
+          const res = await api.bulkRetagDanbooru(slug, [filename]);
+          const ok = res.retagged > 0;
+          if (ok) {
+            // Bust the thumb's tagText cache so the next hover reads the
+            // freshly-tagged line. The FrameRecord doesn't change for a
+            // retag (only the on-disk .txt does), so the thumb wouldn't
+            // otherwise know to refetch.
+            framesStore.markRetagged(filename);
+            framesStore.deselect([filename]);
+          }
+        } catch {
+          // Swallow per-frame errors and let the failed frame stay selected
+          // as the retry hint — no popup, per the requested UX.
+        } finally {
+          framesStore.unmarkProcessing(filename);
+        }
+      }
     } finally {
       retagBusy = false;
     }
@@ -61,14 +81,13 @@
     const filenames = framesStore.selectedFilenames();
     if (filenames.length === 0) return;
     retagBusy = true;
+    // Same up-front spinner-marking pattern as retagDanbooru: every selected
+    // frame is "queued" from the user's perspective the moment they click
+    // Describe, even if the per-frame call hasn't been issued yet.
+    framesStore.markProcessing(filenames);
     // Process one frame at a time so the user gets per-frame feedback (badge
     // pop) as descriptions are written, and so each LLM call uses a fresh
-    // chat-completions context (no carry-over between images). Errors
-    // accumulate but don't abort the rest of the batch — a stuck endpoint
-    // shouldn't black-hole an N-frame queue silently, but we surface a
-    // single summary alert at the end if anything actually failed.
-    let described = 0;
-    let lastError: string | null = null;
+    // chat-completions context (no carry-over between images).
     try {
       for (const filename of filenames) {
         try {
@@ -79,29 +98,57 @@
             // written rather than the one the user clicked.
             const eff = res.effective_filenames?.[0] ?? filename;
             framesStore.markDescribed(eff);
-            described += 1;
-          } else if (res.error) {
-            lastError = res.error;
+            framesStore.deselect([filename]);
           }
-        } catch (e) {
-          lastError = e instanceof Error ? e.message : String(e);
+        } catch {
+          // Failed frames stay selected as the retry hint — no popup, same
+          // UX as retagDanbooru.
+        } finally {
+          framesStore.unmarkProcessing(filename);
         }
       }
     } finally {
       retagBusy = false;
-    }
-    // Only alert when something went wrong — the success path is
-    // communicated visually by the per-frame badge pop animation.
-    if (described < filenames.length) {
-      const failed = filenames.length - described;
-      const detail = lastError ? ` Last error: ${lastError}` : "";
-      alert(`Described ${described} of ${filenames.length}; ${failed} failed.${detail}`);
     }
   }
 
   function toggleSelectAll() {
     if (allSelected) framesStore.clear();
     else framesStore.selectAll();
+  }
+
+  // ---- tag search (right of the frames-count badge) ----
+  // The committed value lives in viewStore.tagQuery (FramesTab depends on
+  // it to refresh the list). The input maintains its own draft and pushes
+  // to the store after a short debounce so each keystroke doesn't trigger
+  // a fresh /api/frames call.
+  let queryDraft = $state(viewStore.tagQuery);
+  let queryTimer: ReturnType<typeof setTimeout> | null = null;
+  const QUERY_DEBOUNCE_MS = 250;
+
+  // Sync inbound changes (e.g. project switch resets the query) into the
+  // draft. Crucially, we only READ viewStore.tagQuery here so that's the
+  // sole dependency — touching queryDraft inside the effect would track
+  // it too, and every keystroke from the input handler would re-fire the
+  // effect and overwrite what the user just typed before the debounce
+  // could push it to the store. Equal writes are no-ops in Svelte 5,
+  // so the unconditional assignment is safe.
+  $effect(() => {
+    queryDraft = viewStore.tagQuery;
+  });
+
+  function onQueryInput(ev: Event) {
+    queryDraft = (ev.target as HTMLInputElement).value;
+    if (queryTimer) clearTimeout(queryTimer);
+    queryTimer = setTimeout(() => {
+      viewStore.tagQuery = queryDraft;
+    }, QUERY_DEBOUNCE_MS);
+  }
+
+  function clearQuery() {
+    if (queryTimer) clearTimeout(queryTimer);
+    queryDraft = "";
+    viewStore.tagQuery = "";
   }
 </script>
 
@@ -157,7 +204,43 @@
 
     <span
       class="h-7 px-3 rounded-full text-xs bg-ink-900 border border-ink-700 text-slate-400 inline-flex items-center"
-      title="Total frames in the current view"
-    >{total} frame{total === 1 ? "" : "s"}</span>
+      title={queryActive
+        ? `${total} of ${totalInView} matching the search`
+        : "Total frames in the current view"}
+    >{#if queryActive}{total} / {totalInView}{:else}{total}{/if} frame{(queryActive ? totalInView : total) === 1 ? "" : "s"}</span>
+
+    <!-- Tag search: substring match on the danbooru line, case-insensitive.
+         Whitespace-separated tokens are AND-ed; a leading `~` negates a
+         token. The input commits to viewStore.tagQuery on a debounce. -->
+    <div class="h-7 inline-flex items-center bg-ink-900 border border-ink-700 rounded-full pl-3 pr-1 focus-within:border-accent-500 transition-colors">
+      <svg
+        viewBox="0 0 16 16"
+        class="w-3 h-3 text-slate-500 flex-shrink-0"
+        fill="currentColor"
+        aria-hidden="true"
+      >
+        <path d="M11.742 10.344a6.5 6.5 0 1 0-1.397 1.398h-.001c.03.04.062.078.098.115l3.85 3.85a1 1 0 0 0 1.415-1.414l-3.85-3.85a1.007 1.007 0 0 0-.115-.1zM12 6.5a5.5 5.5 0 1 1-11 0 5.5 5.5 0 0 1 11 0z"/>
+      </svg>
+      <input
+        type="search"
+        value={queryDraft}
+        oninput={onQueryInput}
+        placeholder="Filter by tag — try `red ~hat`"
+        title={"Whitespace-separated substrings, case-insensitive.\n" +
+               "Tokens prefixed with ~ are excluded.\n" +
+               "Example: red ~hat — has 'red', not 'hat'."}
+        class="bg-transparent border-0 outline-none px-2 text-xs text-slate-200 placeholder:text-slate-500 w-44"
+        aria-label="Filter frames by tag"
+      />
+      {#if queryDraft}
+        <button
+          type="button"
+          onclick={clearQuery}
+          title="Clear filter"
+          aria-label="Clear filter"
+          class="opacity-60 hover:opacity-100 h-5 w-5 inline-flex items-center justify-center text-slate-400 hover:text-slate-200"
+        >✕</button>
+      {/if}
+    </div>
   </div>
 {/if}

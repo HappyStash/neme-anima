@@ -110,6 +110,7 @@ async def list_frames(
     request: Request, slug: str,
     source: str | None = Query(None),
     kept_only: bool = Query(True),
+    query: str | None = Query(None),
     offset: int = Query(0),
     limit: int = Query(500),
 ) -> dict:
@@ -132,10 +133,20 @@ async def list_frames(
 
     kept_dir = project.kept_dir
     rejected_dir = project.rejected_dir
+    tokens = _parse_tag_query(query) if query else []
     items = []
+    total_in_view = 0
     for rec in by_filename.values():
         on_disk = kept_dir / f"{rec.filename}.png" if rec.kept else rejected_dir / f"{rec.filename}.png"
         if not on_disk.is_file():
+            continue
+        # `total` is the count in the current source/kept_only view *before*
+        # the tag query is applied, so the UI can render "X / Y" when a
+        # search is active without firing a second listFrames call.
+        total_in_view += 1
+        if tokens and not _frame_matches_tag_query(
+            kept_dir / f"{rec.filename}.txt", tokens,
+        ):
             continue
         items.append({
             "filename": rec.filename,
@@ -149,7 +160,54 @@ async def list_frames(
             "score": rec.score,
             "has_description": _has_description(kept_dir / f"{rec.filename}.txt"),
         })
-    return {"count": len(items), "items": items[offset: offset + limit]}
+    return {
+        "count": len(items),
+        "total": total_in_view,
+        "items": items[offset: offset + limit],
+    }
+
+
+def _parse_tag_query(query: str) -> list[tuple[bool, str]]:
+    """Split a search query into ``(is_negation, lowercased_substring)`` tokens.
+
+    Whitespace separates tokens; a leading ``~`` flips a token to negation.
+    Empty tokens are dropped. Substring (not exact) match against the
+    danbooru tag line — typing ``red`` matches ``red eyes`` and ``red hair``,
+    and ``~hat`` filters out anything whose tag line contains ``hat``.
+    """
+    out: list[tuple[bool, str]] = []
+    for raw in query.split():
+        if raw.startswith("~"):
+            t = raw[1:].strip().lower()
+            if t:
+                out.append((True, t))
+        else:
+            t = raw.strip().lower()
+            if t:
+                out.append((False, t))
+    return out
+
+
+def _frame_matches_tag_query(
+    txt_path: Path, tokens: list[tuple[bool, str]],
+) -> bool:
+    """Return True iff every positive token is present and every negation is absent."""
+    if not tokens:
+        return True
+    haystack = ""
+    if txt_path.is_file():
+        try:
+            danbooru, _ = split_sidecar(txt_path.read_text(encoding="utf-8"))
+            haystack = danbooru.lower()
+        except OSError:
+            haystack = ""
+    for is_neg, tok in tokens:
+        present = tok in haystack
+        if is_neg and present:
+            return False
+        if not is_neg and not present:
+            return False
+    return True
 
 
 def _has_description(txt_path: Path) -> bool:
@@ -188,12 +246,39 @@ async def get_tags(request: Request, slug: str, filename: str) -> dict:
 
 @router.put("/{slug}/frames/{filename}/tags")
 async def put_tags(request: Request, slug: str, filename: str, body: PutTagsBody) -> dict:
+    """Replace the sidecar with the body's text.
+
+    The request can be a single line (danbooru only) or two lines
+    (danbooru + description). Either shape goes through ``split_sidecar``
+    + ``join_sidecar`` so the danbooru line gets the standard dedupe and
+    whitespace normalization — manual edits that introduce a duplicate tag
+    don't make it to disk.
+
+    When the body has no description line, the existing on-disk description
+    is preserved. The frontend's tag-pill add/remove path can fire this
+    PUT before its lazy hover-fetch of the sidecar resolves; in that race
+    the body legitimately has no description to send, and we must not
+    interpret silence as "delete the description". Sending an explicit
+    two-line body still overwrites whatever's on disk — that's the
+    description-modal path.
+    """
     project = _load(request, slug)
     png, txt = _frame_paths(project, filename)
     if not png.exists():
         raise HTTPException(status_code=404, detail="frame not found")
-    txt.write_text(body.text + "\n", encoding="utf-8")
-    return {"text": body.text}
+    danbooru, description = split_sidecar(body.text)
+    if not description and txt.exists():
+        try:
+            _, description = split_sidecar(txt.read_text(encoding="utf-8"))
+        except OSError:
+            description = ""
+    final = join_sidecar(danbooru, description)
+    txt.write_text(final, encoding="utf-8")
+    # Return what was actually saved (post-dedupe), without the trailing
+    # newline join_sidecar adds — the frontend uses this to refresh its
+    # local tag cache, so any normalization the route applied stays
+    # consistent on the client side too.
+    return {"text": final.rstrip("\n")}
 
 
 @router.get("/{slug}/frames/{filename}/description")
@@ -373,6 +458,7 @@ async def bulk_retag_llm(
     endpoint = project.llm.endpoint
     model = project.llm.model
     prompt = project.llm.prompt or DEFAULT_PROMPT
+    api_key = project.llm.api_key or None
 
     def _describe_one(filename: str) -> tuple[bool, str | None, str | None]:
         # Same retarget rule as the WD14 path: when a crop exists for an
@@ -387,6 +473,7 @@ async def bulk_retag_llm(
             description = describe_image(
                 endpoint=endpoint, model=model, image_path=png,
                 prompt=prompt, danbooru_tags=danbooru or None,
+                api_key=api_key,
             )
         except LLMUnavailable as exc:
             return False, str(exc), eff
@@ -648,6 +735,7 @@ async def upload_frames(
                         image_path=png_path,
                         prompt=project.llm.prompt or DEFAULT_PROMPT,
                         danbooru_tags=tag_text or None,
+                        api_key=project.llm.api_key or None,
                     )
 
                 try:
