@@ -1,4 +1,4 @@
-# neme-anima
+# Neme-Anima
 
 A three-step LoRA builder for anime characters:
 
@@ -89,7 +89,13 @@ Add MKV/MP4 videos and reference images, opt out of refs per video, run extracti
 
 ### Frames
 
-Hover thumbnails for the tag overlay; click pills to edit inline. Shift-click ranges, Ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Bulk regex replace with live preview. Model-agnostic — use the crops and tags with any trainer.
+- Add or remove images from the dataset.
+- Edit tags inline by clicking a pill; edit the natural-language description in the same panel.
+- Search across the dataset by tag.
+- Bulk-edit tags with regex replace, with live preview.
+- Re-crop any image.
+
+Selection: shift-click ranges, ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Hover a thumbnail for the tag overlay.
 
 ![Frames tab](docs/neme-anima_frames.png)
 
@@ -110,12 +116,3 @@ Per-project threshold overrides (frame stride, identification distance, crop pad
 - Health probe at `/api/health`
 
 Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry).
-
-## Performance
-
-A 20-min episode at 24 fps runs in 2–3 minutes on a 4090. Tuning knobs:
-
-- `detect.frame_stride` (default 4) — every Nth frame.
-- `detect.detect_faces` (default `false`) — face boxes; unused by the current matcher.
-- `frame_select.candidate_cap` (default 20) — long tracklets get downsampled to this many evenly-spaced candidates before ranking.
-- `frame_select.dedup_min_frame_gap` — minimum frames between picks within one tracklet.
