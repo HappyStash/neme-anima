@@ -41,11 +41,18 @@
   // / forked diffusion-pipe builds, but the preset explicitly resets it to
   // bfloat16 to clean up any stale fp8 value left by an earlier version
   // of this preset.
+  // ``micro_batch_size`` and ``gradient_accumulation_steps`` are
+  // intentionally NOT in this profile. micro_batch_size is already 1 by
+  // recipe default (and 1 is the minimum); grad_accum doesn't affect VRAM
+  // at all — only effective batch size, which is a training-quality
+  // choice that belongs to the style/character preset. A previous version
+  // of this profile set grad_accum=4 and forgot to mirror it in
+  // LOW_VRAM_RESET, so toggling the chip OFF left users stuck at the
+  // wrong effective batch (character expects 2, style expects 4) and
+  // visibly under-trained character LoRAs.
   const LOW_VRAM_PROFILE: Partial<TrainingConfig> = {
     resolutions: [512],
     rank: 16,
-    micro_batch_size: 1,
-    gradient_accumulation_steps: 4,
     transformer_dtype: "bfloat16",
     // Max allowed by diffusion-pipe (`num_blocks - 2 = 26` for Anima's
     // 28-block DiT). Going to the ceiling — at 24 we still OOM during

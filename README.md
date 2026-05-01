@@ -33,7 +33,7 @@ For the extractor/tagger:
 For the trainer:
 
 - Linux / WSL2 with CUDA 12.4+
-- NVIDIA GPU, 6 GB VRAM minimum, 16 GB for full res LoRA
+- NVIDIA GPU, 6 GB VRAM minimum, 18 GB for full res LoRA
 
 ## Install
 
