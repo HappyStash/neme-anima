@@ -1,6 +1,6 @@
 # Neme-Anima
 
-A three-step LoRA builder for anime characters:
+A three-step character LoRA builder:
 
 1. Extract crops of a target character from a video using reference images.
 2. Auto-tag each crop with WD14 danbooru tags and natural-language captions, then reorganize the dataset from the UI.
@@ -89,7 +89,7 @@ Add MKV/MP4 videos and reference images, opt out of refs per video, run extracti
 
 ### Frames
 
-- Add or remove images from the dataset.
+- Add or remove images from the dataset (using drag&drop).
 - Edit tags inline by clicking a pill; edit the natural-language description in the same panel.
 - Search across the dataset by tag.
 - Bulk-edit tags with regex replace, with live preview.
