@@ -131,10 +131,4 @@ Then in the Settings tab, point `diffusion_pipe_dir` at that clone and set the A
 
 Per-project threshold overrides (frame stride, identification distance, crop padding, etc.).
 
-## REST API
-
-- `/api/projects`, `/api/projects/<slug>/sources`, `/api/projects/<slug>/refs`, `/api/projects/<slug>/frames`, `/api/projects/<slug>/training`, `/api/queue`
-- WebSocket at `/api/ws` streaming `queue.update` / `job.progress` / `job.frame` / `job.log` / `job.done`
-- Health probe at `/api/health`
-
 Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry).

@@ -18,40 +18,64 @@
   const SECTIONS: {
     key: string;
     label: string;
-    fields: { name: string; type: "number" | "boolean"; placeholder: string }[];
+    fields: {
+      name: string;
+      type: "number" | "boolean";
+      placeholder: string;
+      help: string;
+    }[];
   }[] = [
     { key: "scene", label: "Scene detection", fields: [
-        { name: "threshold", type: "number", placeholder: "27.0" },
-        { name: "min_scene_len_frames", type: "number", placeholder: "8" },
+        { name: "threshold", type: "number", placeholder: "27.0",
+          help: "PySceneDetect content threshold. Higher = fewer scene cuts (only big visual changes split). Default 27." },
+        { name: "min_scene_len_frames", type: "number", placeholder: "8",
+          help: "Minimum scene length in frames. Shorter scenes are merged into the previous one." },
       ]},
     { key: "detect", label: "Detection", fields: [
-        { name: "person_score_min", type: "number", placeholder: "0.35" },
-        { name: "frame_stride", type: "number", placeholder: "4" },
-        { name: "detect_faces", type: "boolean", placeholder: "false" },
+        { name: "person_score_min", type: "number", placeholder: "0.35",
+          help: "Minimum YOLO confidence (0–1) to keep a person detection. Higher = fewer false positives but more missed people." },
+        { name: "frame_stride", type: "number", placeholder: "4",
+          help: "Run detection every Nth frame. 4 at 24 fps = 6 effective fps. Higher = faster but coarser." },
+        { name: "detect_faces", type: "boolean", placeholder: "false",
+          help: "Also run face detection. Adds ~45% to detect time and isn't used by the current matcher; leave off unless you're experimenting." },
       ]},
     { key: "track", label: "Tracking", fields: [
-        { name: "track_thresh", type: "number", placeholder: "0.25" },
-        { name: "match_thresh", type: "number", placeholder: "0.8" },
-        { name: "min_tracklet_len", type: "number", placeholder: "3" },
+        { name: "track_thresh", type: "number", placeholder: "0.25",
+          help: "ByteTrack detection threshold for starting new tracks. Higher = fewer, more confident tracks." },
+        { name: "match_thresh", type: "number", placeholder: "0.8",
+          help: "IoU threshold for associating detections with existing tracks. Higher = stricter matching, more track breaks." },
+        { name: "min_tracklet_len", type: "number", placeholder: "3",
+          help: "Discard tracklets shorter than this many frames. Filters out flickers and one-off detections." },
       ]},
     { key: "identify", label: "Identification", fields: [
-        { name: "body_max_distance_strict", type: "number", placeholder: "0.15" },
-        { name: "body_max_distance_loose", type: "number", placeholder: "0.20" },
-        { name: "sample_frames_per_tracklet", type: "number", placeholder: "5" },
+        { name: "body_max_distance_strict", type: "number", placeholder: "0.15",
+          help: "CCIP body-embedding distance below this counts as a high-confidence match to a reference. Lower = stricter." },
+        { name: "body_max_distance_loose", type: "number", placeholder: "0.20",
+          help: "Looser CCIP distance for medium-confidence matches. Should be ≥ strict." },
+        { name: "sample_frames_per_tracklet", type: "number", placeholder: "5",
+          help: "Frames sampled per tracklet to compute its averaged body embedding. More = stabler match, slower." },
       ]},
     { key: "frame_select", label: "Frame selection", fields: [
-        { name: "candidate_cap", type: "number", placeholder: "20" },
-        { name: "dedup_min_frame_gap", type: "number", placeholder: "4" },
-        { name: "top_k_short", type: "number", placeholder: "1" },
-        { name: "top_k_long", type: "number", placeholder: "3" },
+        { name: "candidate_cap", type: "number", placeholder: "20",
+          help: "For long tracklets, score this many evenly-spaced frames as candidates. Caps the per-tracklet cost." },
+        { name: "dedup_min_frame_gap", type: "number", placeholder: "4",
+          help: "Picked frames must be at least this many frames apart, so kept frames don't all land on the same instant." },
+        { name: "top_k_short", type: "number", placeholder: "1",
+          help: "How many frames to keep from a short tracklet (≈ ≤1s of footage)." },
+        { name: "top_k_long", type: "number", placeholder: "3",
+          help: "How many frames to keep from a long tracklet (≥ 5s of footage)." },
       ]},
     { key: "crop", label: "Crop", fields: [
-        { name: "longest_side", type: "number", placeholder: "1024" },
-        { name: "pad_ratio", type: "number", placeholder: "0.10" },
+        { name: "longest_side", type: "number", placeholder: "1024",
+          help: "Resize each saved crop so its longest edge is this many pixels. Aspect ratio is preserved." },
+        { name: "pad_ratio", type: "number", placeholder: "0.10",
+          help: "Extra padding around the person bbox, as a fraction of bbox size. 0.10 = 10% margin on each side." },
       ]},
     { key: "tag", label: "Tagging", fields: [
-        { name: "general_threshold", type: "number", placeholder: "0.35" },
-        { name: "character_threshold", type: "number", placeholder: "0.85" },
+        { name: "general_threshold", type: "number", placeholder: "0.35",
+          help: "WD14 confidence cutoff for general tags. Lower = more tags (noisier); higher = fewer (cleaner)." },
+        { name: "character_threshold", type: "number", placeholder: "0.85",
+          help: "WD14 confidence cutoff for character tags. Kept high to avoid false character matches." },
       ]},
   ];
 
@@ -281,8 +305,14 @@
     </label>
 
     <div class="grid grid-cols-[1fr_auto] gap-2 items-end mb-3">
-      <label class="block">
-        <span class="text-[10px] uppercase tracking-wide text-slate-500">Endpoint</span>
+      <label
+        class="block"
+        title="Base URL of the OpenAI-compatible server. e.g. http://localhost:1234 for LMStudio, https://api.openai.com for OpenAI. The /v1 suffix is added automatically if missing."
+      >
+        <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
+          <span>Endpoint</span>
+          <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
+        </span>
         <input
           bind:value={llmEndpoint}
           placeholder="http://localhost:1234"
@@ -297,10 +327,15 @@
       >{llmDiscovering ? "Probing…" : "Discover models"}</button>
     </div>
 
-    <label class="block mb-3">
+    <label
+      class="block mb-3"
+      title="Bearer token sent as Authorization: Bearer <key>. Required for OpenAI, OpenRouter, and hosted vLLM. LMStudio and most local servers ignore it — leave blank."
+    >
       <span class="flex items-center justify-between">
-        <span class="text-[10px] uppercase tracking-wide text-slate-500">
-          API key <span class="text-slate-600 normal-case tracking-normal">(optional — leave blank for LMStudio)</span>
+        <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
+          <span>API key</span>
+          <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
+          <span class="text-slate-600 normal-case tracking-normal">(optional — leave blank for LMStudio)</span>
         </span>
         <button
           type="button"
@@ -326,8 +361,14 @@
       </p>
     {/if}
 
-    <label class="block mb-3">
-      <span class="text-[10px] uppercase tracking-wide text-slate-500">Model</span>
+    <label
+      class="block mb-3"
+      title="Vision-capable model to call on each kept frame. Click Discover models to populate the list from the endpoint's /v1/models. The toggle above only unlocks once a model is picked."
+    >
+      <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
+        <span>Model</span>
+        <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
+      </span>
       {#if llmModelsAvailable.length === 0}
         <select
           disabled
@@ -348,9 +389,13 @@
       {/if}
     </label>
 
-    <label class="block">
-      <span class="text-[10px] uppercase tracking-wide text-slate-500">
-        Prompt (optional override)
+    <label
+      class="block"
+      title="Instruction sent with each image. Pre-filled with the built-in LoRA caption prompt. Save unchanged to follow upstream changes to the default; edit to lock in a custom prompt for this project."
+    >
+      <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
+        <span>Prompt (optional override)</span>
+        <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
       </span>
       <textarea
         bind:value={llmPrompt}
@@ -372,8 +417,11 @@
       </div>
       <div class="grid grid-cols-2 gap-3">
         {#each section.fields as f}
-          <label class="block">
-            <span class="text-[10px] uppercase tracking-wide text-slate-500">{f.name}</span>
+          <label class="block" title={f.help}>
+            <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
+              <span>{f.name}</span>
+              <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
+            </span>
             <input
               value={getValue(section.key, f.name)}
               oninput={(e) => setValue(section.key, f.name, (e.target as HTMLInputElement).value, f.type)}
