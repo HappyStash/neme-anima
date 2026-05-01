@@ -87,6 +87,25 @@ def test_validate_for_run_requires_train_py(project: Project, tmp_path: Path):
     assert any("train.py" in p for p in problems)
 
 
+def test_validate_for_run_rejects_fp8_transformer_dtype(
+    project: Project, tmp_path: Path,
+):
+    """Stale on-disk configs from an older version of the 'Fit in 8 GB'
+    preset still carry transformer_dtype=float8. Diffusion-pipe's current
+    Anima path crashes on it (RMSNorm fp8/fp32 promotion in the LLM
+    adapter). The Start button's gate must surface a clear, actionable
+    message instead of letting the user wait through caching only to hit
+    the deepspeed traceback."""
+    cfg = project.training
+    cfg.transformer_dtype = "float8"
+    problems = training.validate_for_run(cfg)
+    assert any("transformer_dtype" in p and "float8" in p for p in problems)
+    # Bfloat16 (the recipe default) must not be flagged.
+    cfg.transformer_dtype = "bfloat16"
+    problems = training.validate_for_run(cfg)
+    assert not any("transformer_dtype" in p for p in problems)
+
+
 # ----- TOML rendering -------------------------------------------------------
 
 
@@ -135,8 +154,128 @@ def test_render_run_toml_matches_reference_recipe(
     # Optimizer.
     assert 'type = "adamw_optimi"' in text
     assert "betas = [0.9, 0.99]" in text
+    # Recipe-default transformer dtype.
+    assert 'dtype = "bfloat16"' in text
+    # Recipe-default activation checkpointing: bare boolean ``true``,
+    # NOT the string ``"true"`` and NOT ``"unsloth"`` — diffusion-pipe's
+    # train.py branches on ``== True``.
+    assert "activation_checkpointing = true" in text
+    assert 'activation_checkpointing = "unsloth"' not in text
+    # blocks_to_swap is suppressed entirely when 0 — diffusion-pipe treats
+    # the absence of the key the same as 0, and emitting `= 0` would just
+    # be visual noise in the generated TOML.
+    assert "blocks_to_swap" not in text
+    # torch.compile speeds up the recipe-default path materially; the
+    # constant-token bucketing is specifically arranged to keep Inductor
+    # on a single static shape (see anima-lora-training-notes.md).
+    assert "compile = true" in text
     # No resume flag when not requested.
     assert "resume_from_checkpoint" not in text
+
+
+def test_render_run_toml_low_vram_profile(project: Project, tmp_path: Path):
+    """The 'Fit in 8 GB' preset on the frontend stamps these values; the
+    rendered TOML must surface them where diffusion-pipe expects them:
+    ``blocks_to_swap`` at the top level, base ``dtype = bfloat16`` inside
+    ``[model]``, ``activation_checkpointing = "unsloth"``, optimizer type
+    ``AdamW8bitKahan``, and torch.compile suppressed (incompatible with
+    block_swap's mid-step parameter movement)."""
+    import tomllib
+    project.training.dit_path = str(tmp_path / "dit.bin")
+    project.training.vae_path = str(tmp_path / "vae.bin")
+    project.training.llm_path = str(tmp_path / "llm.bin")
+    # The current preset does NOT enable fp8 — see test below for why.
+    project.training.blocks_to_swap = 26
+    project.training.optimizer_type = "AdamW8bitKahan"
+    project.training.activation_checkpointing_mode = "unsloth"
+    text = training.render_run_toml(
+        project, run_dir=tmp_path / "run", dataset_toml_path=tmp_path / "ds.toml",
+    )
+    parsed = tomllib.loads(text)
+    assert parsed["blocks_to_swap"] == 26
+    assert parsed["model"]["dtype"] == "bfloat16"
+    # compile is off whenever block_swap is on (compile assumes static
+    # param location; block_swap moves params mid-step).
+    assert "compile" not in parsed
+    # blocks_to_swap must NOT leak into [model] or any other section.
+    for section in ("optimizer", "adapter", "model"):
+        if section in parsed:
+            assert "blocks_to_swap" not in parsed[section]
+    # 8-bit optimizer + aggressive checkpointing — the levers that close
+    # the last bit of headroom on a small card. Optimizer kwargs (lr,
+    # betas, weight_decay, eps) must still be present unchanged: train.py
+    # forwards everything except ``type`` to the optimizer constructor.
+    assert parsed["optimizer"]["type"] == "AdamW8bitKahan"
+    assert parsed["optimizer"]["lr"] == project.training.learning_rate
+    assert parsed["optimizer"]["eps"] == project.training.eps
+    assert parsed["activation_checkpointing"] == "unsloth"
+
+
+def test_render_run_toml_recipe_defaults_unchanged_by_new_fields(
+    project: Project, tmp_path: Path,
+):
+    """Regression guard: the 24 GB-class recipe-default path must stay
+    byte-identical to the pre-preset output. If a future schema change
+    breaks this, anyone running the recipe defaults loses their proven
+    config — exactly what the user told us not to disturb."""
+    import tomllib
+    project.training.dit_path = str(tmp_path / "dit.bin")
+    project.training.vae_path = str(tmp_path / "vae.bin")
+    project.training.llm_path = str(tmp_path / "llm.bin")
+    # Spot-check the defaults so this test catches an accidental change
+    # to the dataclass defaults too.
+    assert project.training.optimizer_type == "adamw_optimi"
+    assert project.training.activation_checkpointing_mode == "default"
+    assert project.training.blocks_to_swap == 0
+    text = training.render_run_toml(
+        project, run_dir=tmp_path / "run", dataset_toml_path=tmp_path / "ds.toml",
+    )
+    parsed = tomllib.loads(text)
+    assert parsed["optimizer"]["type"] == "adamw_optimi"
+    assert parsed["activation_checkpointing"] is True
+    assert "blocks_to_swap" not in parsed
+    assert parsed["compile"] is True
+
+
+def test_render_run_toml_emits_fp8_when_set(project: Project, tmp_path: Path):
+    """The schema field is preserved for forked diffusion-pipe builds that
+    fix the upstream LLM-adapter fp8 bug (their llm_adapter.embed has
+    ndim==2 and gets quantized, then RMSNorm crashes promoting fp8*fp32).
+    The renderer must emit transformer_dtype as a separate ``[model]`` key,
+    NOT clobber the base ``dtype`` (which the VAE init reads directly and
+    breaks on float8 — NotImplementedError "reciprocal_cpu")."""
+    import tomllib
+    project.training.dit_path = str(tmp_path / "dit.bin")
+    project.training.vae_path = str(tmp_path / "vae.bin")
+    project.training.llm_path = str(tmp_path / "llm.bin")
+    project.training.transformer_dtype = "float8"
+    text = training.render_run_toml(
+        project, run_dir=tmp_path / "run", dataset_toml_path=tmp_path / "ds.toml",
+    )
+    parsed = tomllib.loads(text)
+    assert parsed["model"]["dtype"] == "bfloat16"
+    assert parsed["model"]["transformer_dtype"] == "float8"
+    # fp8 also crashes Inductor fusion — compile must be off.
+    assert "compile" not in parsed
+
+
+def test_render_run_toml_omits_transformer_dtype_when_default(
+    project: Project, tmp_path: Path,
+):
+    """When transformer_dtype matches the base bfloat16 dtype, we suppress
+    the redundant key so default-recipe TOMLs stay byte-identical to the
+    pre-feature output. Diffusion-pipe falls back to ``dtype`` automatically
+    via ``model_config.get('transformer_dtype', dtype)``."""
+    project.training.dit_path = str(tmp_path / "dit.bin")
+    project.training.vae_path = str(tmp_path / "vae.bin")
+    project.training.llm_path = str(tmp_path / "llm.bin")
+    # Default is "bfloat16"; assert explicitly so a future default change
+    # would force this test to be revisited.
+    assert project.training.transformer_dtype == "bfloat16"
+    text = training.render_run_toml(
+        project, run_dir=tmp_path / "run", dataset_toml_path=tmp_path / "ds.toml",
+    )
+    assert "transformer_dtype" not in text
 
 
 def test_render_run_toml_includes_resume_flag(project: Project, tmp_path: Path):
@@ -307,6 +446,42 @@ def test_default_launcher_argv(project: Project, tmp_path: Path):
     assert argv[0].endswith("deepspeed")
     assert "--num_gpus=1" in argv
     assert str(run_toml.resolve()) in argv
+    # No block_swap → trainer is plain train.py, not the shim.
+    assert "train.py" in argv
+    assert "_diffusion_pipe_shim.py" not in " ".join(argv)
+
+
+def test_launcher_swaps_in_shim_when_block_swap_enabled(
+    project: Project, tmp_path: Path,
+):
+    """When block_swap > 0, the launcher must invoke our pre-train shim
+    instead of train.py directly. The shim patches diffusion-pipe's
+    offloader to use blocking GPU↔CPU transfers — without it, WSL2 users
+    OOM on the pinned-memory ceiling regardless of available VRAM."""
+    project.training.blocks_to_swap = 16
+    run_toml = tmp_path / "run.toml"
+    argv = training.build_launcher_argv(project.training, run_toml=run_toml)
+    # train.py replaced with the shim path; argv shape otherwise unchanged.
+    assert "train.py" not in argv
+    assert any(tok.endswith("_diffusion_pipe_shim.py") for tok in argv)
+    # The shim's path must be absolute — the launcher subprocess runs with
+    # cwd=diffusion_pipe_dir, so a relative path wouldn't resolve.
+    shim_tok = next(tok for tok in argv if tok.endswith("_diffusion_pipe_shim.py"))
+    assert Path(shim_tok).is_absolute()
+    assert Path(shim_tok).is_file()
+
+
+def test_launcher_does_not_swap_shim_for_custom_template(
+    project: Project, tmp_path: Path,
+):
+    """When the user has set launcher_override to a custom template that
+    doesn't name train.py, leave it alone — they're running a different
+    trainer and our shim wouldn't apply."""
+    project.training.blocks_to_swap = 16
+    project.training.launcher_override = "/bin/sh custom_trainer.sh {config}"
+    run_toml = tmp_path / "run.toml"
+    argv = training.build_launcher_argv(project.training, run_toml=run_toml)
+    assert argv == ["/bin/sh", "custom_trainer.sh", str(run_toml.resolve())]
 
 
 def test_launcher_override_with_placeholder(

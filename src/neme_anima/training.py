@@ -150,6 +150,23 @@ def validate_for_run(config: TrainingConfig) -> list[str]:
         problems.append("rank must be > 0")
     if config.learning_rate <= 0:
         problems.append("learning_rate must be > 0")
+    # Anima's LLM adapter is structurally incompatible with diffusion-pipe's
+    # current fp8 path: the adapter's nn.Embedding has ndim==2, so the
+    # transformer-dtype cast quantizes its weights to fp8; embedding lookup
+    # then returns fp8 tensors that flow into RMSNorm, which crashes
+    # promoting fp8*fp32 in the rsqrt branch. Block training before the
+    # subprocess gets there so the user sees a UI-actionable message
+    # instead of a long deepspeed traceback. Drop this guard if/when
+    # diffusion-pipe adds llm_adapter.embed/in_proj/out_proj to its
+    # KEEP_IN_HIGH_PRECISION list (see models/cosmos_predict2.py).
+    if config.transformer_dtype not in ("", "bfloat16"):
+        problems.append(
+            f"transformer_dtype={config.transformer_dtype!r} is not "
+            "supported for Anima: diffusion-pipe's fp8 path crashes "
+            "Anima's LLM adapter (RMSNorm fp8/fp32 promotion error). "
+            "Use 'bfloat16' — toggling the 'Fit in 8 GB' preset off and "
+            "on resets this field."
+        )
     return problems
 
 
@@ -334,6 +351,11 @@ def render_run_toml(
         lines.append(
             _toml_kv("resume_from_checkpoint", resume_from_checkpoint),
         )
+    # ``blocks_to_swap`` is a top-level diffusion-pipe option — like
+    # ``resume_from_checkpoint`` it must not slip under a [section] header
+    # or train.py won't see it.
+    if cfg.blocks_to_swap > 0:
+        lines.append(_toml_kv("blocks_to_swap", cfg.blocks_to_swap))
     lines += [
         "",
         # Training settings
@@ -352,20 +374,53 @@ def render_run_toml(
         "",
         # Checkpointing
         _toml_kv("save_every_n_epochs", cfg.save_every_n_epochs),
-        _toml_kv("activation_checkpointing", True),
+        # ``activation_checkpointing`` accepts either ``true`` (PyTorch
+        # native checkpoint, the recipe default) or the string ``"unsloth"``
+        # (unsloth's variant, more aggressive memory savings — used by the
+        # canonical wan_14b_min_vram example). diffusion-pipe's train.py
+        # branches on ``== True`` vs ``== 'unsloth'``, so we must emit a
+        # bare boolean for the default case, not the string ``"true"``.
+        _toml_kv(
+            "activation_checkpointing",
+            "unsloth" if cfg.activation_checkpointing_mode == "unsloth" else True,
+        ),
         _toml_kv("partition_method", "parameters"),
         _toml_kv("save_dtype", "bfloat16"),
         _toml_kv("caching_batch_size", 1),
         _toml_kv("map_num_proc", 8),
         _toml_kv("steps_per_print", 1),
-        _toml_kv("compile", True),
+        # torch.compile is incompatible with the low-VRAM levers: Inductor
+        # fails to lower fused kernels that touch fp8 weights (Triton MLIR
+        # PassManager error on embedding+RMSNorm fusions), and block_swap
+        # moves params between CPU/GPU mid-step, breaking compile's
+        # static-parameter assumption. The canonical wan_14b_min_vram.toml
+        # / qwen_image_24gb_vram.toml examples shipped with diffusion-pipe
+        # omit ``compile`` for the same reason.
+        *(
+            [_toml_kv("compile", True)]
+            if cfg.transformer_dtype == "bfloat16" and cfg.blocks_to_swap == 0
+            else []
+        ),
         "",
         "[model]",
         _toml_kv("type", "anima"),
         _toml_kv("transformer_path", str(Path(cfg.dit_path).expanduser().resolve())),
         _toml_kv("vae_path", str(Path(cfg.vae_path).expanduser().resolve())),
         _toml_kv("llm_path", str(Path(cfg.llm_path).expanduser().resolve())),
+        # ``dtype`` is the base storage/compute dtype — must be a real fp
+        # type. The VAE init does ``1.0 / std`` on this dtype, which fails
+        # on float8 (NotImplementedError "reciprocal_cpu" for Float8_e4m3fn).
+        # Keep it pinned to bfloat16; the optional fp8 quantization layer
+        # is a separate ``transformer_dtype`` key applied on top.
         _toml_kv("dtype", "bfloat16"),
+        # Only emit transformer_dtype when it differs from the base — that
+        # keeps default-recipe TOMLs unchanged and matches diffusion-pipe's
+        # own ``model_config.get('transformer_dtype', dtype)`` fallback.
+        *(
+            [_toml_kv("transformer_dtype", cfg.transformer_dtype)]
+            if cfg.transformer_dtype and cfg.transformer_dtype != "bfloat16"
+            else []
+        ),
         _toml_kv("llm_adapter_lr", cfg.llm_adapter_lr),
         _toml_kv("sigmoid_scale", cfg.sigmoid_scale),
         "",
@@ -375,7 +430,14 @@ def render_run_toml(
         _toml_kv("dtype", "bfloat16"),
         "",
         "[optimizer]",
-        _toml_kv("type", "adamw_optimi"),
+        # ``optimizer_type`` is forwarded as the diffusion-pipe ``type`` key.
+        # train.py lowercases it before matching, so casing is free; we
+        # preserve user casing for readability ("AdamW8bitKahan" vs
+        # "adamw_optimi"). Optimizer kwargs (lr / betas / weight_decay /
+        # eps) flow through to all supported types unchanged — see
+        # train.py's ``kwargs = {k: v for k, v in optim_config.items()
+        # if k not in ['type', 'gradient_release']}``.
+        _toml_kv("type", cfg.optimizer_type),
         _toml_kv("lr", cfg.learning_rate),
         _toml_kv("betas", cfg.optimizer_betas),
         _toml_kv("weight_decay", cfg.weight_decay),
@@ -754,6 +816,14 @@ def resolve_launcher_binary(config: TrainingConfig) -> tuple[str, str | None]:
     return (token, found)
 
 
+def _shim_path() -> Path:
+    """Absolute path to the diffusion-pipe pre-train shim shipped with this
+    package. The shim patches diffusion-pipe's offloader to use blocking
+    GPU↔CPU transfers — the workaround for WSL2's pinned-memory ceiling.
+    See the shim file's docstring for the full root-cause analysis."""
+    return Path(__file__).parent / "_diffusion_pipe_shim.py"
+
+
 def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
     """Build the argv list to launch the trainer.
 
@@ -766,6 +836,16 @@ def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
     possible so the spawned subprocess finds it regardless of the parent
     process's PATH (e.g. the server is started without the diffusion-pipe
     venv activated).
+
+    When ``blocks_to_swap > 0``, the trainer script (``train.py``) is
+    transparently replaced with our pre-train shim. The shim monkey-patches
+    diffusion-pipe's offloader to use blocking GPU↔CPU transfers (which
+    don't need pinned host memory) before exec'ing train.py — fixing the
+    misleading "CUDA out of memory" error that hits WSL2 users with plenty
+    of free VRAM. The substitution is keyed on the bare token "train.py"
+    so user-supplied launcher_override templates that name train.py
+    explicitly are still upgraded; templates that point at a custom
+    trainer script are left alone (the user knows what they're doing).
     """
     template = (config.launcher_override or "").strip() or DEFAULT_LAUNCHER_TEMPLATE
     sub = template.replace("{config}", str(run_toml.resolve()))
@@ -778,4 +858,11 @@ def build_launcher_argv(config: TrainingConfig, *, run_toml: Path) -> list[str]:
         _, resolved = resolve_launcher_binary(config)
         if resolved:
             argv[0] = resolved
+        # Swap train.py for the shim when block-swap is on. The shim is
+        # invoked by deepspeed exactly like train.py; argv[1:] (--deepspeed
+        # --config <toml>) is forwarded unchanged because the shim exec's
+        # train.py with the same sys.argv.
+        if config.blocks_to_swap > 0:
+            shim = str(_shim_path().resolve())
+            argv = [shim if tok == "train.py" else tok for tok in argv]
     return argv

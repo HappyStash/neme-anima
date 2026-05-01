@@ -140,6 +140,11 @@ export interface TrainingConfig {
   micro_batch_size: number;
   gradient_accumulation_steps: number;
 
+  transformer_dtype: "bfloat16" | "float8" | string;
+  blocks_to_swap: number;
+  optimizer_type: "adamw_optimi" | "AdamW8bitKahan" | string;
+  activation_checkpointing_mode: "default" | "unsloth" | string;
+
   resolutions: number[];
   enable_ar_bucket: boolean;
   min_ar: number;

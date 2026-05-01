@@ -26,14 +26,14 @@ Detections and tracklets are cached so threshold re-runs skip the slow stages.
 
 ## Requirements
 
-For the extractor:
+For the extractor/tagger:
 
-- NVIDIA GPU, 16 GB VRAM minimum, 24 GB comfortable
+- NVIDIA GPU, 4 GB VRAM minimum, 8 GB comfortable
 
 For the trainer:
 
 - Linux / WSL2 with CUDA 12.4+
-- NVIDIA GPU, 4 GB VRAM minimum, 8 GB comfortable
+- NVIDIA GPU, 6 GB VRAM minimum, 16 GB for full res LoRA
 
 ## Install
 

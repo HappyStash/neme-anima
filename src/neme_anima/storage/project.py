@@ -125,6 +125,33 @@ class TrainingConfig:
     micro_batch_size: int = 1
     gradient_accumulation_steps: int = 4
 
+    # VRAM levers — usually only set by the "Fit in 8 GB" preset, hidden
+    # from the regular form. Defaults match the recipe so the 24 GB-class
+    # path stays byte-identical to its pre-preset output.
+    #
+    # ``transformer_dtype`` controls the storage dtype of the diffusion
+    # transformer ("bfloat16" = recipe default, "float8" = ~half the VRAM
+    # at a small quality cost — note: structurally broken for Anima,
+    # rejected by validate_for_run, see comment there).
+    # ``blocks_to_swap`` asks diffusion-pipe to keep N transformer blocks
+    # on CPU and stream them in/out per step — heavy on CPU↔GPU traffic
+    # but the difference between OOM and a usable run on small cards.
+    # ``optimizer_type`` is the diffusion-pipe ``[optimizer] type`` value
+    # — defaults to the recipe's "adamw_optimi"; "AdamW8bitKahan" is the
+    # 8-bit-state variant that saves ~75% of optimizer-state VRAM (used
+    # by the canonical wan_14b_min_vram example). The optimizer kwargs
+    # (lr / betas / weight_decay / eps) flow through unchanged — train.py
+    # builds the optimizer kwargs by stripping ``type`` and forwarding the
+    # rest, so a swap is purely additive.
+    # ``activation_checkpointing_mode`` chooses the recompute strategy:
+    # "default" → ``activation_checkpointing = true`` (PyTorch native
+    # checkpoint), "unsloth" → unsloth's more aggressive variant (less
+    # GPU memory at a small CPU cost).
+    transformer_dtype: str = "bfloat16"
+    blocks_to_swap: int = 0
+    optimizer_type: str = "adamw_optimi"
+    activation_checkpointing_mode: str = "default"
+
     # Resolution / bucketing
     resolutions: list[int] = field(default_factory=lambda: [512, 1024])
     enable_ar_bucket: bool = True

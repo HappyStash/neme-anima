@@ -48,6 +48,11 @@ class TrainingConfigBody(BaseModel):
     micro_batch_size: int | None = None
     gradient_accumulation_steps: int | None = None
 
+    transformer_dtype: str | None = None
+    blocks_to_swap: int | None = None
+    optimizer_type: str | None = None
+    activation_checkpointing_mode: str | None = None
+
     resolutions: list[int] | None = None
     enable_ar_bucket: bool | None = None
     min_ar: float | None = None

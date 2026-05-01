@@ -20,6 +20,55 @@
     },
   };
 
+  // Orthogonal to style/character: the VRAM profile that turns a recipe-
+  // default run into one that fits on an 8 GB card. Measured stable usage
+  // on this stack (single 512 bucket + rank 16 + 26/28 blocks swapped +
+  // AdamW8bitKahan + unsloth checkpointing + the WSL2 blocking-transfer
+  // shim) was ~6.4 GB on an RTX 4090; "8 GB" is the marketed ceiling with
+  // a little headroom for the activation peak.
+  //
+  // The 1024 bucket is dropped (biggest single lever — recipe defaults
+  // need ≈14 GB at 1024px vs ≈10 GB at 512px). Rank is halved for a small
+  // additional saving. 26 of Anima's 28 transformer blocks are CPU-offloaded
+  // — the max diffusion-pipe allows (assert blocks_to_swap <= num_blocks-2)
+  // — keeping only 2 blocks GPU-resident at steady-state. AdamW8bitKahan
+  // compresses the optimizer state by ~75%; unsloth checkpointing offloads
+  // saved hidden states to CPU between forward and backward.
+  // transformer_dtype stays bfloat16: fp8 is structurally broken for Anima
+  // (the LLM adapter's embedding has ndim==2 so diffusion-pipe quantizes
+  // it, and the downstream RMSNorm crashes on `fp8 * fp32_rsqrt`
+  // promotion). The fp8 line in the schema is preserved for forward-compat
+  // / forked diffusion-pipe builds, but the preset explicitly resets it to
+  // bfloat16 to clean up any stale fp8 value left by an earlier version
+  // of this preset.
+  const LOW_VRAM_PROFILE: Partial<TrainingConfig> = {
+    resolutions: [512],
+    rank: 16,
+    micro_batch_size: 1,
+    gradient_accumulation_steps: 4,
+    transformer_dtype: "bfloat16",
+    // Max allowed by diffusion-pipe (`num_blocks - 2 = 26` for Anima's
+    // 28-block DiT). Going to the ceiling — at 24 we still OOM during
+    // setup because cosmos_predict2.py:432 unconditionally moves the
+    // transformer's non-block parts (LLM adapter ~550 MB + embedders +
+    // final layer) onto GPU before the swap loop runs.
+    blocks_to_swap: 26,
+    // 8-bit optimizer state — saves ~75% of optimizer-state VRAM.
+    // bitsandbytes is already in diffusion-pipe's venv. Used by the
+    // canonical wan_14b_min_vram example.
+    optimizer_type: "AdamW8bitKahan",
+    // Aggressive activation checkpointing — also from the wan example.
+    activation_checkpointing_mode: "unsloth",
+  };
+  const LOW_VRAM_RESET: Partial<TrainingConfig> = {
+    resolutions: [512, 1024],
+    rank: 32,
+    transformer_dtype: "bfloat16",
+    blocks_to_swap: 0,
+    optimizer_type: "adamw_optimi",
+    activation_checkpointing_mode: "default",
+  };
+
   type PathField = "diffusion_pipe_dir" | "dit_path" | "vae_path" | "llm_path";
   const PATH_FIELDS: {
     key: PathField;
@@ -199,6 +248,24 @@
 
   function pickResolutionPreset(values: number[]) {
     trainingStore.patch({ resolutions: values });
+  }
+
+  function isLowVramActive(c: TrainingConfig | null): boolean {
+    if (!c) return false;
+    // Detect the preset by the two values the recipe defaults could never
+    // have on their own: a single-512 bucket *and* non-zero block-swap.
+    // (rank could be 16 by user preference even outside the preset, so we
+    // don't gate on it.)
+    return (
+      c.resolutions.length === 1 &&
+      c.resolutions[0] === 512 &&
+      (c.blocks_to_swap ?? 0) > 0
+    );
+  }
+
+  function toggleLowVram() {
+    const patch = isLowVramActive(cfg) ? LOW_VRAM_RESET : LOW_VRAM_PROFILE;
+    trainingStore.patch(patch as Partial<TrainingConfig>);
   }
 
   function fmtBytes(n: number): string {
@@ -832,7 +899,7 @@
       <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
         <div class="flex items-center justify-between mb-3">
           <h3 class="text-sm font-medium text-slate-200">Preset</h3>
-          <div class="flex gap-1">
+          <div class="flex items-center gap-1">
             {#each ["style", "character"] as p}
               <button
                 type="button"
@@ -840,12 +907,25 @@
                 class="px-3 py-1 text-xs rounded {cfg.preset === p ? 'bg-accent-700 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}"
               >{p}</button>
             {/each}
+            <span class="mx-1 text-slate-700" aria-hidden="true">|</span>
+            <button
+              type="button"
+              onclick={toggleLowVram}
+              title="Switches to a known-good ≤8 GB VRAM profile (~6.4 GB measured stable on Anima): single 512 bucket, rank 16, 26 of 28 transformer blocks CPU-offloaded (the max), AdamW8bitKahan optimizer (8-bit state), unsloth activation checkpointing. Click again to restore recipe defaults. Orthogonal to style/character — pick that first, then this if needed."
+              class="px-3 py-1 text-xs rounded {isLowVramActive(cfg) ? 'bg-accent-700 text-white' : 'bg-ink-800 text-slate-300 hover:bg-ink-700'}"
+            >Fit in 8 GB</button>
           </div>
         </div>
         <p class="text-[11px] text-slate-500">
           <strong>style</strong> = recipe defaults (lr 2e-5, grad-accum 4, 40 epochs).
           <strong>character</strong> bumps lr to 5e-5 and epochs to 60 — community
           reports indicate 2e-5 is too low for character identity.
+          <strong>Fit in 8 GB</strong> is independent: it crunches the VRAM-heavy
+          knobs (single 512 bucket, rank 16, 26 of Anima's 28 transformer blocks
+          CPU-offloaded, 8-bit AdamW optimizer state, unsloth activation
+          checkpointing) so the run fits on an 8 GB card — measured stable at
+          ~6.4 GB on Anima. Expect ~10× slower steps and slightly less fine
+          detail. fp8 is intentionally not used — it crashes Anima's LLM adapter.
         </p>
       </div>
 
