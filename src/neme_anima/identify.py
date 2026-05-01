@@ -22,12 +22,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from imgutils.metrics import (
-    ccip_batch_extract_features,
-    ccip_difference,
-    ccip_extract_feature,
-)
-
 from neme_anima.config import IdentifyConfig
 from neme_anima.detect import Detection
 from neme_anima.track import Tracklet
@@ -71,6 +65,8 @@ class Identifier:
         self._load_refs(ref_paths)
 
     def _load_refs(self, paths: list[Path]) -> None:
+        from imgutils.metrics import ccip_extract_feature
+
         if not paths:
             raise ValueError("No reference images provided")
         for p in paths:
@@ -93,6 +89,8 @@ class Identifier:
 
     def distance(self, crop_rgb: np.ndarray) -> float:
         """Minimum CCIP distance from a single body-crop to any reference."""
+        from imgutils.metrics import ccip_difference, ccip_extract_feature
+
         if crop_rgb.size == 0 or min(crop_rgb.shape[:2]) < 8:
             return float("inf")
         feat = ccip_extract_feature(Image.fromarray(crop_rgb))
@@ -101,6 +99,8 @@ class Identifier:
 
     def score_tracklet(self, tracklet: Tracklet, video: Video) -> TrackletScore:
         """Sample evenly across the tracklet, embed each, return median distance."""
+        from imgutils.metrics import ccip_batch_extract_features, ccip_difference
+
         n_samples = min(self.cfg.sample_frames_per_tracklet, tracklet.num_frames)
         if n_samples <= 0:
             return TrackletScore(

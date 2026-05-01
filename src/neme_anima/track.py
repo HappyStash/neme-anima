@@ -7,12 +7,15 @@ scene so identities never persist across hard cuts.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 import numpy as np
-import supervision as sv
 
 from neme_anima.config import TrackConfig
 from neme_anima.detect import Detection, FrameDetections
+
+if TYPE_CHECKING:
+    import supervision as sv
 
 
 @dataclass(frozen=True)
@@ -51,6 +54,8 @@ def _persons_to_sv_detections(
     persons: tuple[Detection, ...]
 ) -> sv.Detections:
     """Build a supervision.Detections object from a tuple of person Detections."""
+    import supervision as sv
+
     if not persons:
         return sv.Detections.empty()
     xyxy = np.array(
@@ -70,6 +75,8 @@ def track_scene(
 
     Returns a list of tracklets. Tracklet ids are unique within the scene only.
     """
+    import supervision as sv
+
     tracker = sv.ByteTrack(
         track_activation_threshold=config.track_thresh,
         minimum_matching_threshold=config.match_thresh,

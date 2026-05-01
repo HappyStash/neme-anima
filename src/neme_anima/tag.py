@@ -13,8 +13,6 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-from imgutils.tagging import get_wd14_tags
-
 from neme_anima.config import TagConfig
 
 
@@ -33,6 +31,8 @@ class Tagger:
         self.cfg = cfg or TagConfig()
 
     def tag(self, image_rgb: np.ndarray) -> TagResult:
+        from imgutils.tagging import get_wd14_tags
+
         pil = Image.fromarray(image_rgb) if not isinstance(image_rgb, Image.Image) else image_rgb
         rating, general, character = get_wd14_tags(
             pil,

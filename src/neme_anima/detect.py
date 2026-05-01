@@ -9,8 +9,6 @@ from typing import Literal
 import numpy as np
 from PIL import Image
 
-from imgutils.detect import detect_faces, detect_person
-
 
 class DetectionKind(str, Enum):
     PERSON = "person"
@@ -78,6 +76,8 @@ class Detector:
         return Image.fromarray(frame_rgb, mode="RGB")
 
     def detect_persons(self, frame_rgb: np.ndarray) -> tuple[Detection, ...]:
+        from imgutils.detect import detect_person
+
         img = self._to_pil(frame_rgb)
         raw = detect_person(
             img,
@@ -96,8 +96,10 @@ class Detector:
         )
 
     def detect_faces(self, frame_rgb: np.ndarray) -> tuple[Detection, ...]:
+        from imgutils.detect import detect_faces as _detect_faces
+
         img = self._to_pil(frame_rgb)
-        raw = detect_faces(
+        raw = _detect_faces(
             img,
             level=self.face_level,
             version=self.face_version,

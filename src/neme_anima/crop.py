@@ -21,8 +21,6 @@ import cv2
 import numpy as np
 from PIL import Image
 
-from imgutils.segment import get_isnetis_mask
-
 from neme_anima.config import CropConfig
 
 
@@ -110,6 +108,8 @@ def crop_frame(
 
 def _isnetis_binary_mask(image_rgb: np.ndarray) -> np.ndarray:
     """Run isnetis on an RGB ndarray, return a uint8 binary mask aligned to it."""
+    from imgutils.segment import get_isnetis_mask
+
     pil = Image.fromarray(image_rgb)
     raw = get_isnetis_mask(pil)
     arr = np.asarray(raw)
