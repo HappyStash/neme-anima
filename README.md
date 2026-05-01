@@ -1,8 +1,12 @@
 # neme-anima
 
-Pulls character-LoRA training crops out of a video. Give it a clip and reference images of an anime character; it returns rectangular crops of just that character, sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL).
+A three-step LoRA builder for anime characters:
 
-The frame extractor and tagger are model-agnostic. The bundled LoRA trainer is wired for Anima.
+1. Extract crops of a target character from a video using reference images.
+2. Auto-tag each crop with WD14 danbooru tags and natural-language captions, then reorganize the dataset from the UI.
+3. Train a LoRA on Anima with the parameters already wired in.
+
+The extractor and tagger are model-agnostic and produce output sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL). The trainer targets Anima.
 
 <p align="center"><img src="docs/chie.png" alt="Result with a Chie LoRA applied to Anima" width="50%"></p>
 
