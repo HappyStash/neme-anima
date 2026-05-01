@@ -18,3 +18,4 @@ src/neme_anima/server/static/*
 !src/neme_anima/server/static/.gitkeep
 docs/superpowers/
 docs/anima-lora-training-notes.md
+CLAUDE.md
