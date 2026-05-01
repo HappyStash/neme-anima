@@ -1,9 +1,23 @@
 import { defineConfig } from "vite";
 import { svelte } from "@sveltejs/vite-plugin-svelte";
+import { closeSync, openSync } from "node:fs";
 import { resolve } from "node:path";
 
+const STATIC_DIR = resolve(__dirname, "../src/neme_anima/server/static");
+
+// emptyOutDir wipes the FastAPI static dir on every build, including the
+// tracked .gitkeep that keeps the directory present on fresh CI checkouts.
+// Recreate it after the bundle closes so commits made post-build don't
+// silently stage its deletion.
+const keepStaticGitkeep = {
+  name: "keep-static-gitkeep",
+  closeBundle() {
+    closeSync(openSync(resolve(STATIC_DIR, ".gitkeep"), "a"));
+  },
+};
+
 export default defineConfig(({ mode }) => ({
-  plugins: [svelte()],
+  plugins: [svelte(), keepStaticGitkeep],
   resolve: {
     alias: {
       $lib: resolve(__dirname, "src/lib"),
@@ -11,7 +25,7 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     // Build directly into the FastAPI static-files dir.
-    outDir: resolve(__dirname, "../src/neme_anima/server/static"),
+    outDir: STATIC_DIR,
     emptyOutDir: true,
     sourcemap: mode === "development",
   },
