@@ -105,6 +105,15 @@ LoRA training with stop/resume and checkpoint retention. Targets Anima.
 
 ![Training tab](docs/neme-anima_train.png)
 
+Training is run through [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe), which has to be set up separately:
+
+```sh
+git clone https://github.com/tdrussell/diffusion-pipe ~/diffusion-pipe
+cd ~/diffusion-pipe && uv venv && uv pip install -r requirements.txt
+```
+
+Then in the Settings tab, point `diffusion_pipe_dir` at that clone and set the Anima DiT, Qwen VAE, and Qwen 3 0.6B text encoder paths (separate download on Huggingface).
+
 ### Settings
 
 Per-project threshold overrides (frame stride, identification distance, crop padding, etc.).
