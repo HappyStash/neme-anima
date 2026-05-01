@@ -1,4 +1,4 @@
-"""Tests for `neme_extractor.server.paths.normalize_input_path`."""
+"""Tests for `neme_anima.server.paths.normalize_input_path`."""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from neme_extractor.server import paths as pmod
+from neme_anima.server import paths as pmod
 
 
 def test_plain_posix_path_unchanged(tmp_path: Path):

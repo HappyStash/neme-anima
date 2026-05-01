@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from neme_extractor.storage.project import Project, Source, RefImage
+from neme_anima.storage.project import Project, Source, RefImage
 
 
 def test_create_initializes_folder_structure(tmp_path: Path):

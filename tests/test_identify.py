@@ -16,11 +16,11 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from neme_extractor.config import IdentifyConfig
-from neme_extractor.detect import Detection, DetectionKind
-from neme_extractor.identify import Identifier, Verdict
-from neme_extractor.track import TrackedDetection, Tracklet
-from neme_extractor.video import Video
+from neme_anima.config import IdentifyConfig
+from neme_anima.detect import Detection, DetectionKind
+from neme_anima.identify import Identifier, Verdict
+from neme_anima.track import TrackedDetection, Tracklet
+from neme_anima.video import Video
 
 
 @pytest.fixture

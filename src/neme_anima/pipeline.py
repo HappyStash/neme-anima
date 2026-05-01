@@ -13,18 +13,18 @@ from rich.progress import (
     TimeElapsedColumn, TimeRemainingColumn,
 )
 
-from neme_extractor.config import Thresholds
-from neme_extractor.crop import crop_frame
-from neme_extractor.detect import Detector, FrameDetections
-from neme_extractor.frame_select import select_frames
-from neme_extractor.identify import Identifier, Verdict
-from neme_extractor.output import OutputWriter
-from neme_extractor.pipeline_progress import NULL_PROGRESS, PipelineProgress
-from neme_extractor.storage.metadata import FrameRecord
-from neme_extractor.storage.project import Project
-from neme_extractor.tag import Tagger, join_sidecar, split_sidecar
-from neme_extractor.track import Tracklet, track_scene
-from neme_extractor.video import Video, detect_scenes
+from neme_anima.config import Thresholds
+from neme_anima.crop import crop_frame
+from neme_anima.detect import Detector, FrameDetections
+from neme_anima.frame_select import select_frames
+from neme_anima.identify import Identifier, Verdict
+from neme_anima.output import OutputWriter
+from neme_anima.pipeline_progress import NULL_PROGRESS, PipelineProgress
+from neme_anima.storage.metadata import FrameRecord
+from neme_anima.storage.project import Project
+from neme_anima.tag import Tagger, join_sidecar, split_sidecar
+from neme_anima.track import Tracklet, track_scene
+from neme_anima.video import Video, detect_scenes
 
 console = Console()
 
@@ -77,7 +77,7 @@ def _run_extract_inner(
         raise ValueError(f"source has no effective references (all opted out): {video_path.name}")
 
     writer = OutputWriter(project=project, video_stem=video_stem)
-    console.rule(f"[bold]neme-extractor[/bold] :: {video_path.name}")
+    console.rule(f"[bold]neme-anima[/bold] :: {video_path.name}")
     console.print(f"refs: {len(eff_refs)} effective ({len(project.refs)} project total)")
 
     vid = Video(video_path)
@@ -269,7 +269,7 @@ def _safe_describe(png: Path, project, danbooru_tags: str) -> str:
     transient endpoint hiccup — log and skip instead. The user can re-trigger
     LLM tagging from the frames toolbar after fixing the endpoint.
     """
-    from neme_extractor.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
+    from neme_anima.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
 
     try:
         return describe_image(

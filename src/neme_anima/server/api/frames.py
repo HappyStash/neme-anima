@@ -13,9 +13,9 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response, UploadFi
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from neme_extractor.storage.metadata import FrameRecord, MetadataLog
-from neme_extractor.storage.project import CROP_SUFFIX, Project
-from neme_extractor.tag import join_sidecar, split_sidecar
+from neme_anima.storage.metadata import FrameRecord, MetadataLog
+from neme_anima.storage.project import CROP_SUFFIX, Project
+from neme_anima.tag import join_sidecar, split_sidecar
 
 router = APIRouter(prefix="/api/projects", tags=["frames"])
 
@@ -447,7 +447,7 @@ async def bulk_retag_llm(
     frontend won't show the button in that state, but a stale tab might still
     fire it.
     """
-    from neme_extractor.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
+    from neme_anima.llm import DEFAULT_PROMPT, LLMUnavailable, describe_image
 
     project = _load(request, slug)
     if not project.llm.model:
@@ -645,7 +645,7 @@ def _get_or_make_tagger(request: Request):
     cached = getattr(request.app.state, "_tagger", None)
     if cached is not None:
         return cached
-    from neme_extractor.tag import Tagger
+    from neme_anima.tag import Tagger
     cached = Tagger()
     request.app.state._tagger = cached
     return cached
@@ -724,7 +724,7 @@ async def upload_frames(
 
             description = ""
             if project.llm.enabled and project.llm.model:
-                from neme_extractor.llm import (
+                from neme_anima.llm import (
                     DEFAULT_PROMPT, LLMUnavailable, describe_image,
                 )
 

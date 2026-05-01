@@ -73,7 +73,7 @@ class LLMConfig:
 
     ``enabled`` only flips on once the user has both pointed at a reachable
     server and picked a model from its discovery response — see
-    :func:`neme_extractor.llm.discover_models`. The pipeline treats
+    :func:`neme_anima.llm.discover_models`. The pipeline treats
     ``enabled=False`` *or* ``model==""`` as off, so the disabled-by-default
     behaviour falls out without an extra check.
 

@@ -691,7 +691,7 @@ wheels = [
 ]
 
 [[package]]
-name = "neme-extractor"
+name = "neme-anima"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [

@@ -34,9 +34,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from neme_extractor import training as training_lib
-from neme_extractor.server.events import Broadcaster, Event
-from neme_extractor.storage.project import Project, TrainingConfig
+from neme_anima import training as training_lib
+from neme_anima.server.events import Broadcaster, Event
+from neme_anima.storage.project import Project, TrainingConfig
 
 logger = logging.getLogger(__name__)
 

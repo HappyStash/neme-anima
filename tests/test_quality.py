@@ -5,7 +5,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
-from neme_extractor.quality import (
+from neme_anima.quality import (
     aspect_ratio_score,
     bbox_visibility,
     mask_connectedness,

@@ -14,8 +14,8 @@ import threading
 import time
 from typing import Any
 
-from neme_extractor.pipeline_progress import PipelineProgress
-from neme_extractor.server.events import Broadcaster, Event
+from neme_anima.pipeline_progress import PipelineProgress
+from neme_anima.server.events import Broadcaster, Event
 
 
 class BroadcasterProgress(PipelineProgress):

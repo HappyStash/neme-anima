@@ -4,7 +4,7 @@ The routes are intentionally chatty: separate read/patch on the config,
 explicit ``check-path`` for live UI feedback as the user types, and a
 ``status`` endpoint the frontend polls (or replays via WebSocket) to keep
 the run panel current. Heavy work (subprocess management) is delegated to
-:class:`neme_extractor.server.training_runner.TrainingManager`.
+:class:`neme_anima.server.training_runner.TrainingManager`.
 """
 
 from __future__ import annotations
@@ -15,8 +15,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from neme_extractor import training as training_lib
-from neme_extractor.storage.project import Project, TrainingConfig
+from neme_anima import training as training_lib
+from neme_anima.storage.project import Project, TrainingConfig
 
 router = APIRouter(prefix="/api/projects", tags=["training"])
 

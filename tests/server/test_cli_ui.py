@@ -6,7 +6,7 @@ from pathlib import Path
 
 from typer.testing import CliRunner
 
-from neme_extractor.cli import app
+from neme_anima.cli import app
 
 runner = CliRunner()
 

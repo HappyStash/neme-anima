@@ -8,8 +8,8 @@ from pathlib import Path
 
 from fastapi.testclient import TestClient
 
-from neme_extractor.server.app import create_app
-from neme_extractor.server.events import Event
+from neme_anima.server.app import create_app
+from neme_anima.server.events import Event
 
 
 def test_ws_receives_published_events(tmp_path: Path):

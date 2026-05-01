@@ -9,8 +9,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from neme_extractor.pipeline import run_extract, run_rerun
-from neme_extractor.storage.project import Project
+from neme_anima.pipeline import run_extract, run_rerun
+from neme_anima.storage.project import Project
 
 
 @pytest.fixture

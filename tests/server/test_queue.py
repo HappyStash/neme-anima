@@ -4,8 +4,8 @@ from __future__ import annotations
 
 import asyncio
 
-from neme_extractor.server.events import Broadcaster
-from neme_extractor.server.queue import JobQueue, JobStatus
+from neme_anima.server.events import Broadcaster
+from neme_anima.server.queue import JobQueue, JobStatus
 
 
 def _runner_factory(record: list[str], *, fail: bool = False, sleep: float = 0.0):

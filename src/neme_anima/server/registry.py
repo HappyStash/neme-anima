@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-from neme_extractor.storage.project import Project
+from neme_anima.storage.project import Project
 
 
 _SCHEMA = """

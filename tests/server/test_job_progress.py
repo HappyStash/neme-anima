@@ -6,8 +6,8 @@ import asyncio
 
 import pytest
 
-from neme_extractor.server.events import Broadcaster, Event
-from neme_extractor.server.job_progress import BroadcasterProgress
+from neme_anima.server.events import Broadcaster, Event
+from neme_anima.server.job_progress import BroadcasterProgress
 
 
 STAGES = [("setup", "Setup"), ("detect", "Detect"), ("save", "Save")]

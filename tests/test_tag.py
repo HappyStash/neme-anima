@@ -8,8 +8,8 @@ import numpy as np
 import pytest
 from PIL import Image
 
-from neme_extractor.config import TagConfig
-from neme_extractor.tag import Tagger, join_sidecar, split_sidecar, write_tags_sidecar
+from neme_anima.config import TagConfig
+from neme_anima.tag import Tagger, join_sidecar, split_sidecar, write_tags_sidecar
 
 
 def test_write_tags_sidecar_produces_txt(tmp_path: Path):

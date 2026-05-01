@@ -1,4 +1,4 @@
-# neme-extractor
+# neme-anima
 
 Pulls character-LoRA training crops out of a video. Give it a clip and one or more reference images of an anime character; it returns rectangular crops of just that character, sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL).
 
@@ -33,17 +33,17 @@ First run downloads ~2.8 GB of weights (anime YOLOv8 person + face, CCIP, isneti
 Override the cache location:
 
 ```sh
-HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-extractor project extract ...
+HF_HUB_CACHE=/mnt/c/Users/<you>/.cache/huggingface/hub uv run neme-anima project extract ...
 ```
 
 ## CLI
 
 ```sh
-uv run neme-extractor project create ~/neme-projects/megumin --name megumin
-uv run neme-extractor project add-ref ~/neme-projects/megumin /path/to/portrait.png
-uv run neme-extractor project add-video ~/neme-projects/megumin /path/to/ep01.mkv
-uv run neme-extractor project add-video ~/neme-projects/megumin /path/to/ep02.mkv
-uv run neme-extractor project extract ~/neme-projects/megumin
+uv run neme-anima project create ~/neme-projects/megumin --name megumin
+uv run neme-anima project add-ref ~/neme-projects/megumin /path/to/portrait.png
+uv run neme-anima project add-video ~/neme-projects/megumin /path/to/ep01.mkv
+uv run neme-anima project add-video ~/neme-projects/megumin /path/to/ep02.mkv
+uv run neme-anima project extract ~/neme-projects/megumin
 ```
 
 Project folder layout:
@@ -62,13 +62,13 @@ Project folder layout:
 Re-run with new thresholds (skips detection + tracking):
 
 ```sh
-uv run neme-extractor project rerun ~/neme-projects/megumin --video ep01
+uv run neme-anima project rerun ~/neme-projects/megumin --video ep01
 ```
 
 ## Web UI
 
 ```sh
-uv run neme-extractor ui
+uv run neme-anima ui
 ```
 
 Binds to `127.0.0.1:<random-port>` and opens the Svelte SPA. Tabs: Sources, Frames, Training, Settings.
@@ -92,7 +92,7 @@ curl -s -X POST http://127.0.0.1:<port>/api/projects \
 curl -s -X POST http://127.0.0.1:<port>/api/projects/megumin/sources/0/extract
 ```
 
-Project state lives in the project folder. The only server-side file is `~/.neme-extractor/db.sqlite` (project registry: names, paths, last-opened timestamps).
+Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry: names, paths, last-opened timestamps).
 
 ## Performance
 

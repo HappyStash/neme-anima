@@ -6,8 +6,8 @@ from pathlib import Path
 
 import pytest
 
-from neme_extractor.server.registry import ProjectRegistry, RegistryEntry
-from neme_extractor.storage.project import Project
+from neme_anima.server.registry import ProjectRegistry, RegistryEntry
+from neme_anima.storage.project import Project
 
 
 @pytest.fixture

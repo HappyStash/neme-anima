@@ -17,10 +17,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from neme_extractor.config import FrameSelectConfig
-from neme_extractor.quality import aspect_ratio_score, bbox_visibility, sharpness
-from neme_extractor.track import Tracklet
-from neme_extractor.video import Video
+from neme_anima.config import FrameSelectConfig
+from neme_anima.quality import aspect_ratio_score, bbox_visibility, sharpness
+from neme_anima.track import Tracklet
+from neme_anima.video import Video
 
 
 @dataclass(frozen=True)

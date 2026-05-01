@@ -7,10 +7,10 @@ from pathlib import Path
 import typer
 from rich.console import Console
 
-from neme_extractor.storage.project import Project
+from neme_anima.storage.project import Project
 
 app = typer.Typer(
-    name="neme-extractor",
+    name="neme-anima",
     help="Extract anime character crops from video for LoRA training.",
     no_args_is_help=True,
     add_completion=False,
@@ -63,7 +63,7 @@ def project_extract(
                                      help="Video stem to extract; default = all sources sequentially."),
 ) -> None:
     """Run extraction on one or all sources in this project."""
-    from neme_extractor.pipeline import run_extract
+    from neme_anima.pipeline import run_extract
 
     p = Project.load(project_dir)
     indices = (
@@ -83,7 +83,7 @@ def project_rerun(
     video: str = typer.Option(..., "--video", "-v", help="Video stem to rerun."),
 ) -> None:
     """Re-run with cached detections + current thresholds."""
-    from neme_extractor.pipeline import run_rerun
+    from neme_anima.pipeline import run_rerun
 
     p = Project.load(project_dir)
     run_rerun(project=p, video_stem=video)
@@ -106,7 +106,7 @@ def ui(
 
     import uvicorn
 
-    from neme_extractor.server.app import create_app
+    from neme_anima.server.app import create_app
 
     state_dir = os.environ.get("NEME_STATE_DIR")
     create_kwargs = {"state_dir": Path(state_dir)} if state_dir else {}
@@ -123,7 +123,7 @@ def ui(
             bind_port = s.getsockname()[1]
 
     url = f"http://{host}:{bind_port}"
-    console.print(f"[bold green]neme-extractor[/bold green] :: serving on {url}")
+    console.print(f"[bold green]neme-anima[/bold green] :: serving on {url}")
 
     if not no_browser:
         threading.Timer(1.0, lambda: webbrowser.open(url)).start()

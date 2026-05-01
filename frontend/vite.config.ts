@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => ({
   },
   build: {
     // Build directly into the FastAPI static-files dir.
-    outDir: resolve(__dirname, "../src/neme_extractor/server/static"),
+    outDir: resolve(__dirname, "../src/neme_anima/server/static"),
     emptyOutDir: true,
     sourcemap: mode === "development",
   },

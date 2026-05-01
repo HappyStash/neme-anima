@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
+from neme_anima.server.app import create_app
 
 
 @pytest.fixture

@@ -6,9 +6,9 @@ from pathlib import Path
 
 import numpy as np
 
-from neme_extractor.output import OutputWriter
-from neme_extractor.storage.metadata import FrameRecord, MetadataLog
-from neme_extractor.storage.project import Project
+from neme_anima.output import OutputWriter
+from neme_anima.storage.metadata import FrameRecord, MetadataLog
+from neme_anima.storage.project import Project
 
 
 def _make_project(tmp_path: Path) -> Project:

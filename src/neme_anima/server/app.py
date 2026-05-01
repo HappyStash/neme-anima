@@ -15,16 +15,16 @@ from pathlib import Path
 
 from fastapi import FastAPI
 
-from neme_extractor.server.events import Broadcaster, Event
-from neme_extractor.server.queue import JobQueue
-from neme_extractor.server.registry import ProjectRegistry
-from neme_extractor.storage.project import Project
+from neme_anima.server.events import Broadcaster, Event
+from neme_anima.server.queue import JobQueue
+from neme_anima.server.registry import ProjectRegistry
+from neme_anima.storage.project import Project
 
 logger = logging.getLogger(__name__)
 
 
 def default_state_dir() -> Path:
-    return Path.home() / ".neme-extractor"
+    return Path.home() / ".neme-anima"
 
 
 def _make_pipeline_runner(
@@ -44,8 +44,8 @@ def _make_pipeline_runner(
         # Light imports first so we can publish the initial UI snapshot before
         # paying the (potentially seconds-long) cost of loading the pipeline's
         # heavy GPU/video deps on the first run.
-        from neme_extractor.pipeline_progress import EXTRACT_STAGES, RERUN_STAGES
-        from neme_extractor.server.job_progress import BroadcasterProgress
+        from neme_anima.pipeline_progress import EXTRACT_STAGES, RERUN_STAGES
+        from neme_anima.server.job_progress import BroadcasterProgress
 
         kind = payload["kind"]  # "extract" | "rerun"
         project_folder = Path(payload["project_folder"])
@@ -78,7 +78,7 @@ def _make_pipeline_runner(
         )
 
         # Heavy imports happen here; the UI already has its skeleton.
-        from neme_extractor.pipeline import run_extract, run_rerun
+        from neme_anima.pipeline import run_extract, run_rerun
 
         def _do_work() -> None:
             try:
@@ -134,7 +134,7 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
     # Training has its own coordinator (one active subprocess at a time);
     # kept distinct from the extraction queue so the existing job-status
     # plumbing doesn't have to grow a second "kind" branch.
-    from neme_extractor.server.training_runner import TrainingManager
+    from neme_anima.server.training_runner import TrainingManager
     training_manager = TrainingManager(broadcaster=broadcaster)
 
     @asynccontextmanager
@@ -146,7 +146,7 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
             await queue.stop()
             await training_manager.shutdown()
 
-    app = FastAPI(title="neme-extractor", lifespan=lifespan)
+    app = FastAPI(title="neme-anima", lifespan=lifespan)
     app.state.registry = registry
     app.state.broadcaster = broadcaster
     app.state.queue = queue
@@ -159,9 +159,9 @@ def create_app(*, state_dir: Path | None = None) -> FastAPI:
         return {"ok": True}
 
     # Routers added later (Tasks 6-10) — currently stubs.
-    from neme_extractor.server.api import projects, sources, refs, frames, llm, training
-    from neme_extractor.server.api import queue as queue_routes
-    from neme_extractor.server.api import ws as ws_routes
+    from neme_anima.server.api import projects, sources, refs, frames, llm, training
+    from neme_anima.server.api import queue as queue_routes
+    from neme_anima.server.api import ws as ws_routes
     app.include_router(projects.router)
     app.include_router(sources.router)
     app.include_router(refs.router)

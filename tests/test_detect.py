@@ -11,7 +11,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neme_extractor.detect import (
+from neme_anima.detect import (
     Detection,
     DetectionKind,
     Detector,

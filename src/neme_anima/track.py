@@ -11,8 +11,8 @@ from dataclasses import dataclass
 import numpy as np
 import supervision as sv
 
-from neme_extractor.config import TrackConfig
-from neme_extractor.detect import Detection, FrameDetections
+from neme_anima.config import TrackConfig
+from neme_anima.detect import Detection, FrameDetections
 
 
 @dataclass(frozen=True)

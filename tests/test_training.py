@@ -10,8 +10,8 @@ from pathlib import Path
 
 import pytest
 
-from neme_extractor import training
-from neme_extractor.storage.project import Project, TrainingConfig
+from neme_anima import training
+from neme_anima.storage.project import Project, TrainingConfig
 
 
 @pytest.fixture

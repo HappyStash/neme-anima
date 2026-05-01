@@ -9,8 +9,8 @@ import pytest
 from PIL import Image
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
-from neme_extractor.storage.project import Project
+from neme_anima.server.app import create_app
+from neme_anima.storage.project import Project
 
 
 @pytest.fixture

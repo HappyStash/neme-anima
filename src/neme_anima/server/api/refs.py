@@ -8,8 +8,8 @@ from fastapi import APIRouter, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from neme_extractor.server.paths import normalize_input_path
-from neme_extractor.storage.project import Project
+from neme_anima.server.paths import normalize_input_path
+from neme_anima.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["refs"])
 

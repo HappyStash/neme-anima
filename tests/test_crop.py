@@ -5,8 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from neme_extractor.config import CropConfig
-from neme_extractor.crop import crop_frame
+from neme_anima.config import CropConfig
+from neme_anima.crop import crop_frame
 
 
 def test_crop_preserves_aspect_and_resizes_to_longest_side():

@@ -6,7 +6,7 @@ from pathlib import Path
 
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
+from neme_anima.server.app import create_app
 
 
 async def test_app_starts_and_serves_health(tmp_path: Path):

@@ -9,7 +9,7 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
-from neme_extractor.storage.project import Project
+from neme_anima.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
 

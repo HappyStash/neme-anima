@@ -23,7 +23,7 @@ from PIL import Image
 
 from imgutils.segment import get_isnetis_mask
 
-from neme_extractor.config import CropConfig
+from neme_anima.config import CropConfig
 
 
 @dataclass(frozen=True)

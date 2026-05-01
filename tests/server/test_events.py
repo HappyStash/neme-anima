@@ -6,7 +6,7 @@ import asyncio
 
 import pytest
 
-from neme_extractor.server.events import Broadcaster, Event
+from neme_anima.server.events import Broadcaster, Event
 
 
 async def test_subscribe_unsubscribe_roundtrip():

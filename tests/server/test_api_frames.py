@@ -9,9 +9,9 @@ import pytest
 from PIL import Image
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
-from neme_extractor.storage.metadata import FrameRecord, MetadataLog
-from neme_extractor.storage.project import Project
+from neme_anima.server.app import create_app
+from neme_anima.storage.metadata import FrameRecord, MetadataLog
+from neme_anima.storage.project import Project
 
 
 @pytest.fixture
@@ -436,7 +436,7 @@ async def test_bulk_retag_llm_prefers_crop_derivative(
         return "Description of the cropped subject."
 
     monkeypatch.setattr(
-        "neme_extractor.llm.describe_image", fake_describe_image,
+        "neme_anima.llm.describe_image", fake_describe_image,
     )
 
     resp = await client.post(
@@ -497,7 +497,7 @@ async def test_bulk_retag_llm_resolves_crop_filename_to_original(
         return "ok"
 
     monkeypatch.setattr(
-        "neme_extractor.llm.describe_image", fake_describe_image,
+        "neme_anima.llm.describe_image", fake_describe_image,
     )
 
     resp = await client.post(

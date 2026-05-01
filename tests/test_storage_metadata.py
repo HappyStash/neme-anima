@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from neme_extractor.storage.metadata import MetadataLog, FrameRecord
+from neme_anima.storage.metadata import MetadataLog, FrameRecord
 
 
 def _rec(filename: str = "x.png", kept: bool = True, score: float = 0.5) -> FrameRecord:

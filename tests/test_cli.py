@@ -8,8 +8,8 @@ import numpy as np
 from PIL import Image
 from typer.testing import CliRunner
 
-from neme_extractor.cli import app
-from neme_extractor.storage.project import Project
+from neme_anima.cli import app
+from neme_anima.storage.project import Project
 
 runner = CliRunner()
 

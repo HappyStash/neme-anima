@@ -15,7 +15,7 @@ from PIL import Image
 
 from imgutils.tagging import get_wd14_tags
 
-from neme_extractor.config import TagConfig
+from neme_anima.config import TagConfig
 
 
 @dataclass(frozen=True)

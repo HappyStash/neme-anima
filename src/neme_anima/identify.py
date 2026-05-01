@@ -28,10 +28,10 @@ from imgutils.metrics import (
     ccip_extract_feature,
 )
 
-from neme_extractor.config import IdentifyConfig
-from neme_extractor.detect import Detection
-from neme_extractor.track import Tracklet
-from neme_extractor.video import Video
+from neme_anima.config import IdentifyConfig
+from neme_anima.detect import Detection
+from neme_anima.track import Tracklet
+from neme_anima.video import Video
 
 
 class Verdict(str, Enum):

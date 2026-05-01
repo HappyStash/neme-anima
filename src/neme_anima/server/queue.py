@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
-from neme_extractor.server.events import Broadcaster, Event
+from neme_anima.server.events import Broadcaster, Event
 
 logger = logging.getLogger(__name__)
 

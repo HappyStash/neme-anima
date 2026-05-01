@@ -4,9 +4,9 @@ verify ByteTrack assigns consistent tracklet IDs and they reset across scenes.
 
 from __future__ import annotations
 
-from neme_extractor.config import TrackConfig
-from neme_extractor.detect import Detection, DetectionKind, FrameDetections
-from neme_extractor.track import track_scene
+from neme_anima.config import TrackConfig
+from neme_anima.detect import Detection, DetectionKind, FrameDetections
+from neme_anima.track import track_scene
 
 
 def _person(x: int, y: int, w: int = 80, h: int = 200, score: float = 0.9) -> Detection:

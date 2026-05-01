@@ -1,5 +1,5 @@
 [project]
-name = "neme-extractor"
+name = "neme-anima"
 version = "0.1.0"
 description = "Extract anime character training crops from video using reference images, for character-LoRA training"
 readme = "README.md"
@@ -21,17 +21,17 @@ dependencies = [
 ]
 
 [project.scripts]
-neme-extractor = "neme_extractor.cli:app"
+neme-anima = "neme_anima.cli:app"
 
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/neme_extractor"]
+packages = ["src/neme_anima"]
 
 [tool.hatch.build.targets.wheel.force-include]
-"src/neme_extractor/server/static" = "neme_extractor/server/static"
+"src/neme_anima/server/static" = "neme_anima/server/static"
 
 [dependency-groups]
 dev = [

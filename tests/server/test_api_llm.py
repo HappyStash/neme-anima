@@ -9,7 +9,7 @@ import httpx
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
+from neme_anima.server.app import create_app
 
 
 @dataclass
@@ -49,7 +49,7 @@ async def test_discover_models_returns_sorted_list(client, monkeypatch):
             ]},
         )
 
-    monkeypatch.setattr("neme_extractor.llm.httpx.get", _fake_get)
+    monkeypatch.setattr("neme_anima.llm.httpx.get", _fake_get)
     resp = await client.post(
         "/api/llm/discover-models",
         json={"endpoint": "http://localhost:1234"},
@@ -65,7 +65,7 @@ async def test_discover_models_forwards_api_key(client, monkeypatch):
         seen["headers"] = headers or {}
         return _FakeResponse(status_code=200, _payload={"data": []})
 
-    monkeypatch.setattr("neme_extractor.llm.httpx.get", _fake_get)
+    monkeypatch.setattr("neme_anima.llm.httpx.get", _fake_get)
     resp = await client.post(
         "/api/llm/discover-models",
         json={"endpoint": "https://api.openai.com", "api_key": "sk-test"},
@@ -78,7 +78,7 @@ async def test_discover_models_422_on_unreachable(client, monkeypatch):
     def _fake_get(url, timeout=None, headers=None):
         raise httpx.ConnectError("connection refused")
 
-    monkeypatch.setattr("neme_extractor.llm.httpx.get", _fake_get)
+    monkeypatch.setattr("neme_anima.llm.httpx.get", _fake_get)
     resp = await client.post(
         "/api/llm/discover-models",
         json={"endpoint": "http://nope:9999"},

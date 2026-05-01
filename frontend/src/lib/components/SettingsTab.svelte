@@ -13,7 +13,7 @@
     "and any distinctive details. Be concise, factual, and avoid speculating " +
     "about names, intent, or off-camera context.";
 
-  // The threshold sections we expose. Pulled from src/neme_extractor/config.py.
+  // The threshold sections we expose. Pulled from src/neme_anima/config.py.
   const SECTIONS: {
     key: string;
     label: string;

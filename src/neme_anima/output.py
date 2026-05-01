@@ -18,11 +18,11 @@ import numpy as np
 import pandas as pd
 from PIL import Image
 
-from neme_extractor.detect import Detection, DetectionKind
-from neme_extractor.storage.metadata import FrameRecord, MetadataLog
-from neme_extractor.storage.project import Project
-from neme_extractor.track import TrackedDetection, Tracklet
-from neme_extractor.video import Scene
+from neme_anima.detect import Detection, DetectionKind
+from neme_anima.storage.metadata import FrameRecord, MetadataLog
+from neme_anima.storage.project import Project
+from neme_anima.track import TrackedDetection, Tracklet
+from neme_anima.video import Scene
 
 
 def _safe_name(video_stem: str, scene_idx: int, tracklet_id: int, frame_idx: int) -> str:

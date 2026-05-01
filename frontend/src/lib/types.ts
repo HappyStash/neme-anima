@@ -1,4 +1,4 @@
-// Mirrors the Pydantic models in src/neme_extractor/server/api/*.py.
+// Mirrors the Pydantic models in src/neme_anima/server/api/*.py.
 
 export interface Source {
   path: string;

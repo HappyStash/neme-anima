@@ -11,11 +11,11 @@ from PIL import Image
 
 from imgutils.metrics import ccip_extract_feature
 
-from neme_extractor.config import FrameSelectConfig
-from neme_extractor.detect import Detection, DetectionKind
-from neme_extractor.frame_select import select_frames
-from neme_extractor.track import TrackedDetection, Tracklet
-from neme_extractor.video import Video
+from neme_anima.config import FrameSelectConfig
+from neme_anima.detect import Detection, DetectionKind
+from neme_anima.frame_select import select_frames
+from neme_anima.track import TrackedDetection, Tracklet
+from neme_anima.video import Video
 
 
 @pytest.fixture

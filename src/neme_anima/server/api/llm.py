@@ -7,7 +7,7 @@ import asyncio
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from neme_extractor.llm import LLMUnavailable, discover_models
+from neme_anima.llm import LLMUnavailable, discover_models
 
 router = APIRouter(prefix="/api/llm", tags=["llm"])
 

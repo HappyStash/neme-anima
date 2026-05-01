@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from neme_extractor.pipeline import _wipe_outputs_for_stem
-from neme_extractor.storage.project import Project
+from neme_anima.pipeline import _wipe_outputs_for_stem
+from neme_anima.storage.project import Project
 
 
 def _touch(path: Path) -> None:

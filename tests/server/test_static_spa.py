@@ -7,13 +7,13 @@ from pathlib import Path
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from neme_extractor.server.app import create_app
+from neme_anima.server.app import create_app
 
 
 async def test_root_serves_spa_index(tmp_path: Path):
     # Construct a minimal fake static dir with an index.html so the test
     # works even before the real frontend is built.
-    static_dir = Path(__file__).parent.parent.parent / "src" / "neme_extractor" / "server" / "static"
+    static_dir = Path(__file__).parent.parent.parent / "src" / "neme_anima" / "server" / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     index = static_dir / "index.html"
     if not index.exists():
@@ -32,7 +32,7 @@ async def test_root_serves_spa_index(tmp_path: Path):
 
 
 async def test_unknown_spa_route_falls_back_to_index(tmp_path: Path):
-    static_dir = Path(__file__).parent.parent.parent / "src" / "neme_extractor" / "server" / "static"
+    static_dir = Path(__file__).parent.parent.parent / "src" / "neme_anima" / "server" / "static"
     static_dir.mkdir(parents=True, exist_ok=True)
     index = static_dir / "index.html"
     placeholder = False

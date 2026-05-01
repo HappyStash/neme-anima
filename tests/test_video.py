@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 import pytest
 
-from neme_extractor.video import Video, detect_scenes
+from neme_anima.video import Video, detect_scenes
 
 
 @pytest.fixture
