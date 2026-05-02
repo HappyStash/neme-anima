@@ -237,3 +237,65 @@ def test_tag_stage_skips_frames_owned_by_preserved_character(
     assert (project.kept_dir / "ep01__manual_drop.txt").read_text(encoding="utf-8").startswith(
         "fake_tag, another",
     )
+
+
+def test_tag_stage_skips_preserved_frame_after_rejected_sample_collision(
+    tmp_path: Path, monkeypatch,
+):
+    """Regression: a preserved frame whose filename collides with a
+    rejected-sample write (same scene/tracklet/frame_idx → same stem,
+    but a different physical file in rejected/) lost its ownership in
+    the tag stage and got silently retagged.
+
+    Repro: char A previously kept ep01__s0_t0_f10. char A is then
+    opted-out for this run (preserved). char B's identify pass runs;
+    the same tracklet doesn't match B and triggers a rejected-sample
+    append at the SAME filename stem (kept=False). _kept_frame_owners
+    then reported owner=None for the preserved file, and the tag stage
+    re-tagged it with B's WD14 output, overwriting A's curated sidecar.
+    """
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.storage.project import DEFAULT_CHARACTER_SLUG
+
+    project = Project.create(tmp_path / "p", name="p")
+    project.add_character(name="Mio")
+    _seed_kept_image(project, name="ep01__s0_t0_f10")
+    log = MetadataLog(project.metadata_path)
+    # Original kept record from a prior run (owner = default / "yui").
+    log.append(FrameRecord(
+        filename="ep01__s0_t0_f10", kept=True,
+        scene_idx=0, tracklet_id=0, frame_idx=10,
+        timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+        ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+        score=0.9, video_stem="ep01",
+        character_slug=DEFAULT_CHARACTER_SLUG,
+    ))
+    # Same filename stem appended later as a rejected-sample diagnostic
+    # — the actual file lives in rejected/, but the metadata stem
+    # collides with the preserved frame in kept/.
+    log.append(FrameRecord(
+        filename="ep01__s0_t0_f10", kept=False,
+        scene_idx=0, tracklet_id=0, frame_idx=10,
+        timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+        ccip_distance=0.45, sharpness=0.0, visibility=0.0, aspect=0.0,
+        score=0.0, video_stem="ep01",
+        character_slug=DEFAULT_CHARACTER_SLUG,
+    ))
+    (project.kept_dir / "ep01__s0_t0_f10.txt").write_text(
+        "user, curated, tags\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline_mod, "Tagger", _StubTagger)
+
+    pipeline_mod._run_tag_stage(
+        project=project, video_stem="ep01",
+        thresholds=Thresholds(),
+        progress=pipeline_mod.NULL_PROGRESS,
+        pause=False,
+        preserve_owned_by={DEFAULT_CHARACTER_SLUG},
+    )
+
+    # The curated sidecar must survive — preserved owner attribution
+    # is robust to kept=False records appended after the kept=True row.
+    assert (project.kept_dir / "ep01__s0_t0_f10.txt").read_text(
+        encoding="utf-8"
+    ).startswith("user, curated, tags")

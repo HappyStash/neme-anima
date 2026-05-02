@@ -477,19 +477,32 @@ def _refs_by_character(project: Project, source_idx: int) -> dict[str, list[Path
 def _kept_frame_owners(project: Project, video_stem: str) -> dict[str, str]:
     """Return ``{filename_stem: character_slug}`` for kept frames of this video.
 
-    Last-write-wins per filename — a frame moved to a different character
-    is counted under its new owner only. Used by the scoped-wipe path to
-    decide which files to preserve based on ownership. Frames whose latest
-    record is rejected (kept=False) drop out: the wipe treats them as
-    diagnostic samples, not curation, and always deletes them.
+    Tracks the latest ``kept=True`` row per filename and IGNORES
+    ``kept=False`` rows entirely. Two reasons:
+
+    1. Rejected-sample diagnostics (:func:`_save_one_rejected_sample`)
+       append ``kept=False`` rows under the SAME filename stem as a
+       previously-kept frame whenever a tracklet's midpoint coincides
+       with a kept frame's selected index — but the diagnostic file
+       lives in ``rejected/``, not ``kept/``. Last-write-wins across
+       both kinds silently invalidated ownership for the curated frame
+       still on disk and let the tag stage retag it.
+    2. Dedup demotions move the file to ``rejected/``; once a file is
+       no longer in ``kept_dir``, the wipe and tag stages never see it
+       anyway. So filtering kept=False out costs nothing here.
+
+    A "move to a different character" still works: that path appends a
+    new ``kept=True`` row with the new slug, and last-kept-wins picks
+    the new owner up.
     """
     from neme_anima.storage.metadata import MetadataLog
 
     log = MetadataLog(project.metadata_path)
-    latest: dict[str, tuple[bool, str]] = {}
+    latest_kept: dict[str, str] = {}
     for rec in log.iter_records(video_stem=video_stem):
-        latest[rec.filename] = (rec.kept, rec.character_slug)
-    return {fn: slug for fn, (kept, slug) in latest.items() if kept}
+        if rec.kept:
+            latest_kept[rec.filename] = rec.character_slug
+    return latest_kept
 
 
 def _wipe_outputs_for_stem(
