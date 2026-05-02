@@ -21,6 +21,12 @@
 
   let tagText = $state<string | null>(null);
   let hovered = $state(false);
+  // Mirrors `hovered` for keyboard focus: while a TagPill input or the
+  // "+" pill is focused inside this tile, the bottom panel must stay
+  // mounted even after the cursor leaves the frame. Without it the panel
+  // unmounts on mouseleave, the input gets destroyed, and the user's
+  // in-progress edit (and its focus) goes with it.
+  let focusWithin = $state(false);
 
   // Show the per-character badge only in "All" view, and only when the
   // project has more than one character — single-character workflows stay
@@ -248,6 +254,16 @@
   class="relative aspect-[3/4] group"
   onmouseenter={() => { hovered = true; void loadTags(); }}
   onmouseleave={() => (hovered = false)}
+  onfocusin={() => { focusWithin = true; void loadTags(); }}
+  onfocusout={(e) => {
+    // relatedTarget is where focus is heading. If it's still somewhere
+    // inside this tile (e.g. tabbing between tag pills), don't tear the
+    // panel down. Otherwise the bottom panel collapses naturally.
+    const next = e.relatedTarget as Node | null;
+    if (!next || !(e.currentTarget as Node).contains(next)) {
+      focusWithin = false;
+    }
+  }}
   role="presentation"
 >
   <button
@@ -349,8 +365,9 @@
   <!-- Bottom hover panel: tag pills + (+) pill + description pill, all
        inline. Sits above the image button (z-20) so clicks don't bubble
        into the preview-open handler. The TagPills' own e.stopPropagation
-       handles the rest. -->
-  {#if hovered}
+       handles the rest. Stays mounted while focus is inside the tile so
+       the user's tag edit isn't torn down when the cursor strays out. -->
+  {#if hovered || focusWithin}
     <div
       class="absolute inset-x-0 bottom-0 max-h-[60%] overflow-hidden p-1.5 pt-6 flex flex-wrap gap-1 items-center z-20
         bg-gradient-to-t from-black/85 via-black/70 to-transparent pointer-events-none"

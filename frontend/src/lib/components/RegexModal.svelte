@@ -62,10 +62,22 @@
     return { before, after };
   }
 
+  // Debounce + race protection. Clearing `preview = []` on every keystroke
+  // would have collapsed the preview pane and re-grown it as results came
+  // back, making the modal flash and shift as the user typed. Instead we
+  // wait a short window after the last keystroke, then swap the new
+  // preview in atomically. `previewGen` discards results from any
+  // in-flight refresh that's been superseded by a newer one.
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let previewGen = 0;
+
   async function refreshPreview() {
-    previewError = null;
-    preview = [];
-    if (!pattern) return;
+    const myGen = ++previewGen;
+    if (!pattern) {
+      preview = [];
+      previewError = null;
+      return;
+    }
     try {
       const flags = caseInsensitive ? "ig" : "g";
       // Use JS regex for the preview; the server uses Python's re, which is
@@ -77,22 +89,32 @@
       const out: { before: Segment[]; after: Segment[] }[] = [];
       for (const fn of sample) {
         const t = await api.getTags(slug, fn);
-        // The server applies the regex only to the danbooru (first) line.
-        // Preview the same way so the user sees the actual diff.
+        if (myGen !== previewGen) return;
         const firstLine = t.text.split("\n", 1)[0];
         const diff = diffLine(firstLine, re, replacement);
         if (diff) out.push(diff);
       }
+      if (myGen !== previewGen) return;
       preview = out;
+      previewError = null;
     } catch (e) {
+      if (myGen !== previewGen) return;
       previewError = String(e);
+      preview = [];
     }
   }
 
   $effect(() => {
-    void refreshPreview();
     // depends on: pattern, replacement, caseInsensitive, filenames
     void pattern; void replacement; void caseInsensitive; void filenames;
+    if (debounceTimer) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => { void refreshPreview(); }, 200);
+    return () => {
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimer = null;
+      }
+    };
   });
 
   async function apply() {
@@ -170,7 +192,10 @@
       </label>
     </div>
 
-    <div class="mt-4 max-h-48 overflow-y-auto bg-ink-950 border border-ink-700 rounded p-2 text-xs font-mono">
+    <!-- Fixed height (h-48) instead of max-h: the pane never grows or
+         shrinks as the preview content changes, so the modal stops
+         shifting and flashing while the user is typing. -->
+    <div class="mt-4 h-48 overflow-y-auto bg-ink-950 border border-ink-700 rounded p-2 text-xs font-mono">
       {#if previewError}
         <p class="text-red-400">{previewError}</p>
       {:else if preview.length === 0}

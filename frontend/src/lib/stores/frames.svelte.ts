@@ -50,37 +50,45 @@ class FramesStore {
   }
 
   /** Mark a frame as freshly described: flip its has_description and bump the
-   *  per-filename counter so FrameThumb runs its pop animation. */
+   *  per-filename counter so FrameThumb runs its pop animation.
+   *
+   *  IMPORTANT: mutate the Map/Set state fields in place rather than
+   *  reassigning the field. Svelte 5's reactive Map proxy tracks reads at
+   *  the per-key level — so a `set(filename, …)` on this map only
+   *  invalidates effects that read `.get(filename)`, not effects keyed to
+   *  some other filename. Reassigning the whole map (`this.describedVersion
+   *  = new Map(…)`) instead invalidates the field broadly, which then
+   *  re-runs every FrameThumb's tag-cache-busting effect — including the
+   *  one for the frame the user is currently editing. The user's TagPill
+   *  unmounts mid-edit and the in-progress text is lost. */
   markDescribed(filename: string) {
     const idx = this.items.findIndex((i) => i.filename === filename);
     if (idx >= 0 && !this.items[idx].has_description) {
       this.items[idx] = { ...this.items[idx], has_description: true };
     }
-    const next = new Map(this.describedVersion);
-    next.set(filename, (next.get(filename) ?? 0) + 1);
-    this.describedVersion = next;
+    this.describedVersion.set(
+      filename,
+      (this.describedVersion.get(filename) ?? 0) + 1,
+    );
   }
 
-  /** Bump a frame's retag counter so FrameThumb invalidates its tag cache. */
+  /** Bump a frame's retag counter so FrameThumb invalidates its tag cache.
+   *  Mutates in place — see the note on markDescribed above. */
   markRetagged(filename: string) {
-    const next = new Map(this.retaggedVersion);
-    next.set(filename, (next.get(filename) ?? 0) + 1);
-    this.retaggedVersion = next;
+    this.retaggedVersion.set(
+      filename,
+      (this.retaggedVersion.get(filename) ?? 0) + 1,
+    );
   }
 
   /** Add filenames to the in-flight set so their tiles show a spinner. */
   markProcessing(filenames: Iterable<string>) {
-    const next = new Set(this.processing);
-    for (const f of filenames) next.add(f);
-    this.processing = next;
+    for (const f of filenames) this.processing.add(f);
   }
 
   /** Remove a single filename from the in-flight set (per-frame finish). */
   unmarkProcessing(filename: string) {
-    if (!this.processing.has(filename)) return;
-    const next = new Set(this.processing);
-    next.delete(filename);
-    this.processing = next;
+    this.processing.delete(filename);
   }
 
   /** Drop filenames from the selection without removing the underlying rows.
