@@ -1,9 +1,15 @@
 import type {
-  FrameRecord, FramesPage, LLMConfig, ProjectListEntry, ProjectView, QueueItem,
+  CharacterView, FrameRecord, FramesPage, LLMConfig,
+  ProjectListEntry, ProjectView, QueueItem,
   TrainingConfig, TrainingConfigResponse, TrainingStatus, TrainingRun,
   TrainingCheckpoint, TrainingDatasetPreview, TrainingPathCheck,
   TrainingLogResponse, TrainingTomlPreview,
 } from "./types";
+
+/** Server-side sentinel for the Frames-tab "unsorted" filter. Mirrors the
+ *  Python constant in src/neme_anima/server/api/frames.py. Kept in sync
+ *  manually since changing it breaks the wire protocol either way. */
+export const UNSORTED_FILTER_SENTINEL = "__unsorted__";
 
 export class ApiError extends Error {
   constructor(public status: number, public detail: unknown) {
@@ -81,11 +87,21 @@ export const sourceThumbnailUrl = (slug: string, idx: number) =>
 export const removeSource = (slug: string, idx: number) =>
   request<void>(`/api/projects/${encodeURIComponent(slug)}/sources/${idx}`, { method: "DELETE" });
 
-export const setExcludedRefs = (slug: string, idx: number, excluded: string[]) =>
-  request<{ excluded_refs: string[] }>(
-    `/api/projects/${encodeURIComponent(slug)}/sources/${idx}`,
-    { method: "PATCH", body: JSON.stringify({ excluded_refs: excluded }) },
-  );
+export const setExcludedRefs = (
+  slug: string,
+  idx: number,
+  excluded: string[],
+  characterSlug?: string,
+) => {
+  const url = characterSlug
+    ? `/api/projects/${encodeURIComponent(slug)}/sources/${idx}` +
+      `?character_slug=${encodeURIComponent(characterSlug)}`
+    : `/api/projects/${encodeURIComponent(slug)}/sources/${idx}`;
+  return request<{ excluded_refs: Record<string, string[]> }>(url, {
+    method: "PATCH",
+    body: JSON.stringify({ excluded_refs: excluded }),
+  });
+};
 
 export const extractSource = (slug: string, idx: number) =>
   request<{ job_id: string }>(
@@ -101,24 +117,32 @@ export const rerunSource = (slug: string, idx: number) =>
 
 // ---- refs ----
 
-export const addRefs = (slug: string, paths: string[]) =>
-  request<{ added: string[]; skipped: string[] }>(
-    `/api/projects/${encodeURIComponent(slug)}/refs`,
-    { method: "POST", body: JSON.stringify({ paths }) },
-  );
+export const addRefs = (slug: string, paths: string[], characterSlug?: string) => {
+  const url = characterSlug
+    ? `/api/projects/${encodeURIComponent(slug)}/refs` +
+      `?character_slug=${encodeURIComponent(characterSlug)}`
+    : `/api/projects/${encodeURIComponent(slug)}/refs`;
+  return request<{ added: string[]; skipped: string[] }>(url, {
+    method: "POST",
+    body: JSON.stringify({ paths }),
+  });
+};
 
 export const refImageUrl = (slug: string, refPath: string): string => {
   const name = refPath.split("/").pop() ?? refPath;
   return `/api/projects/${encodeURIComponent(slug)}/refs/${encodeURIComponent(name)}/image`;
 };
 
-export const uploadRefs = async (slug: string, files: File[]) => {
+export const uploadRefs = async (
+  slug: string, files: File[], characterSlug?: string,
+) => {
   const fd = new FormData();
   for (const f of files) fd.append("files", f, f.name);
-  const resp = await fetch(
-    `/api/projects/${encodeURIComponent(slug)}/refs/upload`,
-    { method: "POST", body: fd },
-  );
+  const url = characterSlug
+    ? `/api/projects/${encodeURIComponent(slug)}/refs/upload` +
+      `?character_slug=${encodeURIComponent(characterSlug)}`
+    : `/api/projects/${encodeURIComponent(slug)}/refs/upload`;
+  const resp = await fetch(url, { method: "POST", body: fd });
   if (!resp.ok) {
     let detail: unknown = null;
     try { detail = await resp.json(); } catch { /* body not JSON */ }
@@ -126,6 +150,36 @@ export const uploadRefs = async (slug: string, files: File[]) => {
   }
   return resp.json() as Promise<{ added: string[]; skipped: string[] }>;
 };
+
+// ---- characters ----
+
+export const listCharacters = (slug: string) =>
+  request<CharacterView[]>(
+    `/api/projects/${encodeURIComponent(slug)}/characters`,
+  );
+
+export const createCharacter = (
+  slug: string, body: { name: string; slug?: string },
+) =>
+  request<CharacterView>(
+    `/api/projects/${encodeURIComponent(slug)}/characters`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
+export const updateCharacter = (
+  slug: string, characterSlug: string,
+  body: { name?: string; trigger_token?: string },
+) =>
+  request<CharacterView>(
+    `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}`,
+    { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export const deleteCharacter = (slug: string, characterSlug: string) =>
+  request<void>(
+    `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}`,
+    { method: "DELETE" },
+  );
 
 export const removeRef = (slug: string, path: string) =>
   request<void>(`/api/projects/${encodeURIComponent(slug)}/refs`, {
@@ -141,6 +195,9 @@ export const listFrames = (
     /** Whitespace-separated tag substrings; tokens prefixed with `~` negate.
      *  Server-side filter so large grids stay paginated by what matched. */
     query?: string;
+    /** Filter by character; pass UNSORTED_FILTER_SENTINEL for orphan rows
+     *  whose slug isn't in the project's current character set. */
+    characterSlug?: string;
     offset?: number;
     limit?: number;
   } = {},
@@ -148,6 +205,7 @@ export const listFrames = (
   const q = new URLSearchParams();
   if (opts.source) q.set("source", opts.source);
   if (opts.query) q.set("query", opts.query);
+  if (opts.characterSlug) q.set("character_slug", opts.characterSlug);
   if (opts.offset !== undefined) q.set("offset", String(opts.offset));
   if (opts.limit !== undefined) q.set("limit", String(opts.limit));
   const qs = q.toString();
@@ -155,6 +213,44 @@ export const listFrames = (
     `/api/projects/${encodeURIComponent(slug)}/frames${qs ? `?${qs}` : ""}`,
   );
 };
+
+export const moveFrameToCharacter = (
+  slug: string, filename: string, characterSlug: string,
+) =>
+  request<FrameRecord>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/character`,
+    { method: "POST", body: JSON.stringify({ character_slug: characterSlug }) },
+  );
+
+export const bulkMoveFrames = (
+  slug: string, filenames: string[], characterSlug: string,
+) =>
+  request<{ moved: number; missing: string[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/bulk-move`,
+    {
+      method: "POST",
+      body: JSON.stringify({ filenames, character_slug: characterSlug }),
+    },
+  );
+
+export const duplicateFrameForCharacter = (
+  slug: string, filename: string, characterSlug: string,
+) =>
+  request<FrameRecord>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/${encodeURIComponent(filename)}/duplicate`,
+    { method: "POST", body: JSON.stringify({ character_slug: characterSlug }) },
+  );
+
+export const bulkDuplicateFrames = (
+  slug: string, filenames: string[], characterSlug: string,
+) =>
+  request<{ duplicated: string[]; missing: string[] }>(
+    `/api/projects/${encodeURIComponent(slug)}/frames/bulk-duplicate`,
+    {
+      method: "POST",
+      body: JSON.stringify({ filenames, character_slug: characterSlug }),
+    },
+  );
 
 export const getTags = (slug: string, filename: string) =>
   request<{ text: string }>(
@@ -258,13 +354,16 @@ export const getCropRect = async (
   }
 };
 
-export const uploadFrames = async (slug: string, files: File[]) => {
+export const uploadFrames = async (
+  slug: string, files: File[], characterSlug?: string,
+) => {
   const fd = new FormData();
   for (const f of files) fd.append("files", f, f.name);
-  const resp = await fetch(
-    `/api/projects/${encodeURIComponent(slug)}/frames/upload`,
-    { method: "POST", body: fd },
-  );
+  const url = characterSlug
+    ? `/api/projects/${encodeURIComponent(slug)}/frames/upload` +
+      `?character_slug=${encodeURIComponent(characterSlug)}`
+    : `/api/projects/${encodeURIComponent(slug)}/frames/upload`;
+  const resp = await fetch(url, { method: "POST", body: fd });
   if (!resp.ok) {
     let detail: unknown = null;
     try { detail = await resp.json(); } catch { /* body not JSON */ }

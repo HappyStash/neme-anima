@@ -2,6 +2,7 @@
   import * as api from "$lib/api";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
+  import { viewStore } from "$lib/stores/view.svelte";
   import type { FrameRecord } from "$lib/types";
   import DescriptionModal from "./DescriptionModal.svelte";
   import TagPill from "./TagPill.svelte";
@@ -19,6 +20,19 @@
 
   let tagText = $state<string | null>(null);
   let hovered = $state(false);
+
+  // Show the per-character badge only in "All" view, and only when the
+  // project has more than one character — single-character workflows stay
+  // visually identical to the pre-multi-character UI. The badge text
+  // prefers the character's display name with the slug as a fallback for
+  // orphan frames whose slug no longer matches any current character.
+  let characterBadge = $derived.by(() => {
+    if (viewStore.characterFilter !== "all") return null;
+    const chars = projectsStore.active?.characters ?? [];
+    if (chars.length <= 1) return null;
+    const match = chars.find((c) => c.slug === frame.character_slug);
+    return match?.name ?? frame.character_slug;
+  });
   // Local override so a fresh save through the description modal flips the
   // badge without us having to refetch the whole frames list.
   let hasDescriptionLocal = $state<boolean | null>(null);
@@ -276,6 +290,19 @@
   >
     {frame.video_stem}
   </span>
+
+  <!-- Character badge (bottom-left, "All" view only). Always visible in
+       multi-character projects so the user can scan owners across the grid
+       without hovering each tile. Hidden in single-character projects and
+       in per-character filters where every visible tile has the same owner. -->
+  {#if characterBadge}
+    <span
+      class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-accent-500/80 backdrop-blur-sm rounded text-white z-20 pointer-events-none shadow-[0_1px_4px_rgba(0,0,0,0.4)]"
+      title="Routed to {characterBadge}"
+    >
+      {characterBadge}
+    </span>
+  {/if}
 
   <!-- Spinner overlay: covers the whole tile during a bulk re-tag /
        re-describe. Sits above every other badge (z-30) and absorbs pointer

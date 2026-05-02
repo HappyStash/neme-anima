@@ -3,7 +3,11 @@
 export interface Source {
   path: string;
   added_at: string;
-  excluded_refs: string[];
+  /** Per-character opt-out map: ``{character_slug: [ref_path, ...]}``.
+   *  Replaces the pre-multi-character flat list. Old projects auto-migrate
+   *  to ``{default: [...]}`` server-side, so the frontend only ever sees
+   *  the dict shape. */
+  excluded_refs: Record<string, string[]>;
   /** True when the project has at least one kept frame on disk for this
    *  video stem — survives server restarts. */
   extracted: boolean;
@@ -12,6 +16,14 @@ export interface Source {
 export interface RefImage {
   path: string;
   added_at: string;
+}
+
+export interface CharacterView {
+  slug: string;
+  name: string;
+  trigger_token: string;
+  refs: RefImage[];
+  ref_count: number;
 }
 
 export interface LLMConfig {
@@ -30,7 +42,11 @@ export interface ProjectView {
   folder: string;
   created_at: string;
   sources: Source[];
+  /** Backwards-compat alias for ``characters[0].refs`` — kept on the wire
+   *  while older code paths still read it. New code should use
+   *  ``characters`` directly. */
   refs: RefImage[];
+  characters: CharacterView[];
   thresholds_overrides: Record<string, Record<string, unknown>>;
   source_root: string | null;
   pause_before_tag: boolean;
@@ -57,6 +73,9 @@ export interface FrameRecord {
   timestamp_seconds: number;
   ccip_distance: number;
   score: number;
+  /** Slug of the character the frame is currently routed to. Defaults to
+   *  ``"default"`` for legacy single-character extractions. */
+  character_slug: string;
   /** True when the .txt sidecar has a non-empty second line (an LLM
    *  description). Drives the at-a-glance "described" badge in the grid. */
   has_description: boolean;

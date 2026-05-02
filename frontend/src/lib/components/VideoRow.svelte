@@ -2,6 +2,7 @@
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { jobsStore } from "$lib/stores/jobs.svelte";
+  import { viewStore } from "$lib/stores/view.svelte";
   import type { RefImage, Source } from "$lib/types";
   import PipelineRunner from "./PipelineRunner.svelte";
   import RefStrip from "./RefStrip.svelte";
@@ -9,9 +10,18 @@
   type Props = {
     source: Source;
     sourceIdx: number;
+    /** Refs of the *active* character — they're what the per-video strip
+     *  toggles on/off via per-character opt-outs. */
     projectRefs: readonly RefImage[];
   };
   const { source, sourceIdx, projectRefs }: Props = $props();
+
+  // Per-video opt-outs are now keyed by character slug — surface only the
+  // active character's list so the existing "active refs" math still
+  // works on a flat array of paths.
+  let activeExcluded = $derived(
+    source.excluded_refs[viewStore.activeCharacterSlug] ?? [],
+  );
 
   let busy = $state(false);
   let thumbBroken = $state(false);
@@ -48,7 +58,7 @@
     if (projectsStore.active) await projectsStore.load(projectsStore.active.slug);
   }
 
-  let activeRefs = $derived(projectRefs.length - source.excluded_refs.length);
+  let activeRefs = $derived(projectRefs.length - activeExcluded.length);
   let basename = $derived(source.path.split("/").pop() ?? source.path);
   let thumbUrl = $derived.by(() => {
     const slug = projectsStore.active?.slug;
@@ -98,7 +108,7 @@
       <RefStrip
         sourceIdx={sourceIdx}
         refPaths={projectRefs.map((r) => r.path)}
-        excluded={source.excluded_refs}
+        excluded={activeExcluded}
       />
     </div>
     {#if job}

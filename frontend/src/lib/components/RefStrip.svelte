@@ -1,10 +1,13 @@
 <script lang="ts">
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
+  import { viewStore } from "$lib/stores/view.svelte";
 
   type Props = {
     sourceIdx: number;
     refPaths: readonly string[];
+    /** The active character's per-video opt-outs — flat list of ref paths.
+     *  Other characters' opt-outs aren't visible from this strip. */
     excluded: readonly string[];
   };
   const { sourceIdx, refPaths, excluded }: Props = $props();
@@ -19,7 +22,12 @@
     const next = isActive(path)
       ? [...excluded, path]
       : excluded.filter((p) => p !== path);
-    await api.setExcludedRefs(slug, sourceIdx, next);
+    // Scope the opt-out write to the active character — refs are
+    // character-scoped, so flipping a ref off only affects that character's
+    // matching for this video.
+    await api.setExcludedRefs(
+      slug, sourceIdx, next, viewStore.activeCharacterSlug,
+    );
     if (projectsStore.active) await projectsStore.load(projectsStore.active.slug);
   }
 

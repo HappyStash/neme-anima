@@ -1,12 +1,20 @@
 <script lang="ts">
   import * as api from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
+  import { viewStore } from "$lib/stores/view.svelte";
+  import CharacterStrip from "./CharacterStrip.svelte";
   import VideoRow from "./VideoRow.svelte";
 
   let importing = $state(false);
   let uploading = $state(false);
   let imageDragOver = $state(false);
   let fileInput: HTMLInputElement | undefined = $state();
+
+  // Active character drives what refs appear in the project-level grid AND
+  // what each per-video ref strip renders. Sourced from viewStore so the
+  // selection survives navigating away and back to this tab.
+  let activeCharacter = $derived(projectsStore.activeCharacter);
+  let activeRefs = $derived(activeCharacter?.refs ?? []);
 
   async function pickVideoFolder() {
     const slug = projectsStore.active?.slug;
@@ -48,7 +56,14 @@
     }
     uploading = true;
     try {
-      await api.uploadRefs(slug, images);
+      // Refs are character-scoped: drops land on the currently-selected
+      // character so the user's mental model ("I'm uploading Mio refs
+      // because Mio is selected") matches reality. Falling back to the
+      // first character covers projects that haven't migrated yet.
+      const target =
+        viewStore.activeCharacterSlug ||
+        projectsStore.active?.characters[0]?.slug;
+      await api.uploadRefs(slug, images, target);
       await projectsStore.load(slug);
     } finally {
       uploading = false;
@@ -76,6 +91,10 @@
     if (!confirm(`Remove reference image “${name}” from this project? The file will be deleted.`)) return;
     await api.removeRef(slug, path);
     await projectsStore.load(slug);
+  }
+
+  function selectCharacter(slug: string) {
+    viewStore.activeCharacterSlug = slug;
   }
 
   let sourceRootShort = $derived.by(() => {
@@ -151,12 +170,25 @@
   </div>
 
   {#if projectsStore.active}
-    {#if projectsStore.active.refs.length > 0}
-      <p class="text-[10px] uppercase text-slate-500 tracking-wide mb-2">project references — apply to every video by default</p>
+    <p class="text-[10px] uppercase text-slate-500 tracking-wide mb-2">
+      characters — refs and per-video opt-outs are scoped to the active one
+    </p>
+    <div class="mb-4">
+      <CharacterStrip
+        editable
+        activeKey={viewStore.activeCharacterSlug}
+        onselect={selectCharacter}
+      />
+    </div>
+
+    {#if activeRefs.length > 0 && activeCharacter}
+      <p class="text-[10px] uppercase text-slate-500 tracking-wide mb-2">
+        {activeCharacter.name}'s references — apply to every video by default
+      </p>
       <div class="bg-ink-950 border border-ink-700 rounded-xl px-3 py-2.5 flex items-center gap-2 mb-4">
-        <span class="text-[10px] uppercase text-slate-600 tracking-wide w-24">Refs ({projectsStore.active.refs.length})</span>
+        <span class="text-[10px] uppercase text-slate-600 tracking-wide w-24">Refs ({activeRefs.length})</span>
         <div class="flex gap-1.5 flex-1 flex-wrap">
-          {#each projectsStore.active.refs as r (r.path)}
+          {#each activeRefs as r (r.path)}
             <div class="relative group w-9 h-9">
               <img
                 src={api.refImageUrl(projectsStore.active.slug, r.path)}
@@ -183,7 +215,7 @@
       <p class="text-slate-500 text-sm py-8 text-center">No videos yet. Pick a folder above.</p>
     {:else}
       {#each projectsStore.active.sources as s, i (s.path)}
-        <VideoRow source={s} sourceIdx={i} projectRefs={projectsStore.active.refs} />
+        <VideoRow source={s} sourceIdx={i} projectRefs={activeRefs} />
       {/each}
     {/if}
   {/if}

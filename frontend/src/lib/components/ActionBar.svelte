@@ -7,6 +7,93 @@
   type Props = { onopenRegex: () => void };
   const { onopenRegex }: Props = $props();
 
+  // Multi-character UI is only relevant when the project actually has more
+  // than one character — single-character projects keep the pre-multi-
+  // character action set unchanged.
+  let characters = $derived(projectsStore.active?.characters ?? []);
+  let multiCharacter = $derived(characters.length > 1);
+
+  // Two dropdown menus: "Move to" (single-owner correction) and "Also
+  // assign to" (duplicate). They share state so opening one closes the
+  // other and the user can't accidentally fire both at once.
+  let openMenu = $state<"move" | "copy" | null>(null);
+  let menuBusy = $state(false);
+
+  function toggleMenu(which: "move" | "copy") {
+    openMenu = openMenu === which ? null : which;
+  }
+
+  async function moveSelectedTo(targetSlug: string) {
+    const slug = projectsStore.active?.slug;
+    if (!slug || menuBusy) return;
+    const filenames = framesStore.selectedFilenames();
+    if (filenames.length === 0) {
+      openMenu = null;
+      return;
+    }
+    menuBusy = true;
+    try {
+      await api.bulkMoveFrames(slug, filenames, targetSlug);
+      // The frames now belong to a different character — refresh so they
+      // disappear from the current per-character view (or update their
+      // badges in "All" view).
+      await framesStore.refresh(slug, {
+        source: viewStore.sourceFilter ?? undefined,
+        query: viewStore.tagQuery || undefined,
+        characterSlug:
+          viewStore.characterFilter === "all"
+            ? undefined
+            : viewStore.characterFilter === "unsorted"
+              ? "__unsorted__"
+              : viewStore.characterFilter,
+      });
+      framesStore.clear();
+    } catch (e) {
+      alert(`Move failed: ${e}`);
+    } finally {
+      menuBusy = false;
+      openMenu = null;
+    }
+  }
+
+  async function alsoAssignSelectedTo(targetSlug: string) {
+    const slug = projectsStore.active?.slug;
+    if (!slug || menuBusy) return;
+    const filenames = framesStore.selectedFilenames();
+    if (filenames.length === 0) {
+      openMenu = null;
+      return;
+    }
+    menuBusy = true;
+    try {
+      const res = await api.bulkDuplicateFrames(slug, filenames, targetSlug);
+      // Originals stay where they are; duplicates are new files. Always
+      // refresh so the user sees the copies appear (under "All" or under
+      // the target character's filter).
+      await framesStore.refresh(slug, {
+        source: viewStore.sourceFilter ?? undefined,
+        query: viewStore.tagQuery || undefined,
+        characterSlug:
+          viewStore.characterFilter === "all"
+            ? undefined
+            : viewStore.characterFilter === "unsorted"
+              ? "__unsorted__"
+              : viewStore.characterFilter,
+      });
+      if (res.missing.length > 0) {
+        alert(
+          `Duplicated ${res.duplicated.length}; ` +
+          `${res.missing.length} skipped (no metadata).`,
+        );
+      }
+    } catch (e) {
+      alert(`Assign failed: ${e}`);
+    } finally {
+      menuBusy = false;
+      openMenu = null;
+    }
+  }
+
   let count = $derived.by(() => {
     framesStore.selectionVersion; // reactive dependency
     return framesStore.selection.count();
@@ -194,6 +281,61 @@
             title="Re-run LLM description on selected frames (preserves WD14 tags)"
             class="bg-teal-500/30 hover:bg-teal-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
           >Describe</button>
+        {/if}
+        {#if multiCharacter}
+          <!-- Move + Also-assign live behind dropdowns to keep the chip
+               row tight. Each opens an inline menu listing every project
+               character. Move = single-owner correction (current frames
+               leave the active filter); Also assign = duplicate (originals
+               stay, copies appear under the target). -->
+          <div class="relative">
+            <button
+              type="button"
+              onclick={() => toggleMenu("move")}
+              disabled={menuBusy}
+              title="Reassign these frames to a different character"
+              class="bg-fuchsia-500/30 hover:bg-fuchsia-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >Move ▾</button>
+            {#if openMenu === "move"}
+              <div
+                class="absolute top-full mt-1 left-0 bg-ink-900 border border-ink-700 rounded-lg shadow-xl py-1 min-w-[10rem] z-50"
+                role="menu"
+              >
+                {#each characters as c (c.slug)}
+                  <button
+                    type="button"
+                    onclick={() => moveSelectedTo(c.slug)}
+                    class="block w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-ink-800"
+                    role="menuitem"
+                  >{c.name} <span class="text-slate-500">({c.ref_count})</span></button>
+                {/each}
+              </div>
+            {/if}
+          </div>
+          <div class="relative">
+            <button
+              type="button"
+              onclick={() => toggleMenu("copy")}
+              disabled={menuBusy}
+              title="Duplicate these frames into another character (originals stay)"
+              class="bg-cyan-500/30 hover:bg-cyan-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
+            >Also assign ▾</button>
+            {#if openMenu === "copy"}
+              <div
+                class="absolute top-full mt-1 left-0 bg-ink-900 border border-ink-700 rounded-lg shadow-xl py-1 min-w-[10rem] z-50"
+                role="menu"
+              >
+                {#each characters as c (c.slug)}
+                  <button
+                    type="button"
+                    onclick={() => alsoAssignSelectedTo(c.slug)}
+                    class="block w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-ink-800"
+                    role="menuitem"
+                  >{c.name} <span class="text-slate-500">({c.ref_count})</span></button>
+                {/each}
+              </div>
+            {/if}
+          </div>
         {/if}
         <button
           type="button"

@@ -108,17 +108,27 @@ def _resolve_tag_target(
     return img, txt, base
 
 
+# Sentinel character_slug filter: matches frames whose slug isn't in the
+# project's current character set (e.g. legacy "default" rows in a project
+# that has since renamed/deleted the default character). Surfaced to the
+# user in the Frames tab as the "unsorted" chip so misrouted frames don't
+# silently disappear.
+UNSORTED_FILTER_SENTINEL = "__unsorted__"
+
+
 @router.get("/{slug}/frames")
 async def list_frames(
     request: Request, slug: str,
     source: str | None = Query(None),
     kept_only: bool = Query(True),
     query: str | None = Query(None),
+    character_slug: str | None = Query(None),
     offset: int = Query(0),
     limit: int = Query(500),
 ) -> dict:
     project = _load(request, slug)
     log = MetadataLog(project.metadata_path)
+    known_slugs = {c.slug for c in project.characters}
 
     # The metadata log is append-only — a delete or rerun leaves orphan rows
     # behind. We dedupe by filename (keep the most recent record) and filter
@@ -143,9 +153,19 @@ async def list_frames(
         on_disk = kept_dir / f"{rec.filename}.png" if rec.kept else rejected_dir / f"{rec.filename}.png"
         if not on_disk.is_file():
             continue
-        # `total` is the count in the current source/kept_only view *before*
-        # the tag query is applied, so the UI can render "X / Y" when a
-        # search is active without firing a second listFrames call.
+        # Character-slug filter is applied here (after the on-disk check) so
+        # the per-character total reflects what the user can actually see.
+        # The "unsorted" sentinel matches any record whose slug isn't in the
+        # project's current character list — that way frames orphaned by a
+        # rename/delete still surface to the user instead of vanishing.
+        if character_slug == UNSORTED_FILTER_SENTINEL:
+            if rec.character_slug in known_slugs:
+                continue
+        elif character_slug is not None and rec.character_slug != character_slug:
+            continue
+        # `total` is the count in the current source/character/kept_only view
+        # *before* the tag query is applied, so the UI can render "X / Y"
+        # when a search is active without firing a second listFrames call.
         total_in_view += 1
         if tokens and not _frame_matches_tag_query(
             kept_dir / f"{rec.filename}.txt", tokens,
@@ -161,6 +181,7 @@ async def list_frames(
             "timestamp_seconds": rec.timestamp_seconds,
             "ccip_distance": rec.ccip_distance,
             "score": rec.score,
+            "character_slug": rec.character_slug,
             "has_description": _has_description(kept_dir / f"{rec.filename}.txt"),
         })
     return {
@@ -515,6 +536,7 @@ def _record_to_dict(rec: FrameRecord) -> dict:
         "timestamp_seconds": rec.timestamp_seconds,
         "ccip_distance": rec.ccip_distance,
         "score": rec.score,
+        "character_slug": rec.character_slug,
     }
 
 
@@ -686,13 +708,28 @@ def _process_uploaded_image(
 
 @router.post("/{slug}/frames/upload")
 async def upload_frames(
-    request: Request, slug: str, files: list[UploadFile],
+    request: Request,
+    slug: str,
+    files: list[UploadFile],
+    character_slug: str | None = Query(None),
 ) -> dict:
-    """Accept dropped image files, store + auto-tag them as custom-source frames."""
+    """Accept dropped image files, store + auto-tag them as custom-source frames.
+
+    ``character_slug`` (when provided) routes every dropped image to that
+    character's bucket. Omitting it defaults to the project's first
+    character — what the mono-character UI does today, and what dropping
+    in the "All" view should do until CCIP-routing is wired in.
+    """
     import numpy as np
     from PIL import Image
 
     project = _load(request, slug)
+    if character_slug not in (None, "") and project.character_by_slug(character_slug) is None:
+        raise HTTPException(status_code=404, detail=f"unknown character: {character_slug}")
+    target_slug = (
+        character_slug if character_slug
+        else (project.characters[0].slug if project.characters else "default")
+    )
     project.kept_dir.mkdir(parents=True, exist_ok=True)
     log = MetadataLog(project.metadata_path)
 
@@ -784,6 +821,7 @@ async def upload_frames(
                 aspect=(w / h) if h else 1.0,
                 score=0.0,
                 video_stem=CUSTOM_VIDEO_STEM,
+                character_slug=target_slug,
             )
             log.append(rec)
             added.append(_record_to_dict(rec))
@@ -791,3 +829,174 @@ async def upload_frames(
             await f.close()
 
     return {"added": added, "skipped": skipped, "llm_error": llm_error}
+
+
+# ---------------------------------------------------------------------------
+# Multi-character: move + duplicate frame endpoints
+# ---------------------------------------------------------------------------
+
+
+class MoveFrameBody(BaseModel):
+    """Body for the move/also-assign endpoints."""
+    character_slug: str
+
+
+class BulkMoveBody(BaseModel):
+    filenames: list[str]
+    character_slug: str
+
+
+def _ensure_character_or_404(project: Project, slug: str) -> None:
+    if project.character_by_slug(slug) is None:
+        raise HTTPException(status_code=404, detail=f"unknown character: {slug}")
+
+
+def _append_moved_record(project: Project, rec: FrameRecord, new_slug: str) -> FrameRecord:
+    """Append a copy of ``rec`` with ``character_slug`` swapped.
+
+    The metadata log is append-only and ``list_frames`` is last-write-wins
+    per filename, so emitting a fresh record with the new slug is enough to
+    flip the frame's character without rewriting older rows. We also pin
+    ``kept=True`` here — the move action only makes sense on currently-kept
+    frames, and a stale rejected row could otherwise resurrect a deleted
+    frame's slug into the active view.
+    """
+    moved = FrameRecord(
+        filename=rec.filename,
+        kept=True,
+        scene_idx=rec.scene_idx,
+        tracklet_id=rec.tracklet_id,
+        frame_idx=rec.frame_idx,
+        timestamp_seconds=rec.timestamp_seconds,
+        bbox=rec.bbox,
+        ccip_distance=rec.ccip_distance,
+        sharpness=rec.sharpness,
+        visibility=rec.visibility,
+        aspect=rec.aspect,
+        score=rec.score,
+        video_stem=rec.video_stem,
+        character_slug=new_slug,
+    )
+    MetadataLog(project.metadata_path).append(moved)
+    return moved
+
+
+@router.post("/{slug}/frames/{filename}/character")
+async def move_frame_to_character(
+    request: Request, slug: str, filename: str, body: MoveFrameBody,
+) -> dict:
+    """Reassign a frame to a different character.
+
+    Implementation: append a fresh metadata row with the new slug. The
+    on-disk PNG and sidecar stay where they are — this is a metadata-only
+    operation, which is what makes per-character "moves" cheap.
+    """
+    project = _load(request, slug)
+    _ensure_character_or_404(project, body.character_slug)
+    rec = _find_record(project, filename)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="frame metadata not found")
+    moved = _append_moved_record(project, rec, body.character_slug)
+    return _record_to_dict(moved)
+
+
+@router.post("/{slug}/frames/bulk-move")
+async def bulk_move_to_character(
+    request: Request, slug: str, body: BulkMoveBody,
+) -> dict:
+    """Reassign many frames to a target character in one round-trip."""
+    project = _load(request, slug)
+    _ensure_character_or_404(project, body.character_slug)
+    moved = 0
+    missing: list[str] = []
+    for fn in body.filenames:
+        rec = _find_record(project, fn)
+        if rec is None:
+            missing.append(fn)
+            continue
+        _append_moved_record(project, rec, body.character_slug)
+        moved += 1
+    return {"moved": moved, "missing": missing}
+
+
+def _duplicate_for_character(
+    project: Project, rec: FrameRecord, new_slug: str,
+) -> FrameRecord:
+    """Copy a frame's PNG + sidecar to a fresh filename and append a row.
+
+    Each character carries an independent caption — different core tags get
+    pruned per character — so a true copy (not a hard-link) is the right
+    semantics. The new filename keeps the original's recognisable prefix
+    plus a short random suffix so two duplicates of the same frame, e.g.
+    sent to two different characters, never collide.
+    """
+    src_png, src_txt = _frame_paths(project, rec.filename)
+    if not src_png.is_file():
+        raise HTTPException(status_code=404, detail=f"frame missing on disk: {rec.filename}")
+
+    token = secrets.token_hex(4)
+    base = f"{rec.filename}_dup_{token}"
+    while (project.kept_dir / f"{base}.png").exists():
+        token = secrets.token_hex(4)
+        base = f"{rec.filename}_dup_{token}"
+
+    dst_png = project.kept_dir / f"{base}.png"
+    dst_txt = project.kept_dir / f"{base}.txt"
+    dst_png.write_bytes(src_png.read_bytes())
+    if src_txt.is_file():
+        dst_txt.write_text(src_txt.read_text(encoding="utf-8"), encoding="utf-8")
+    else:
+        dst_txt.write_text("\n", encoding="utf-8")
+
+    new_rec = FrameRecord(
+        filename=base,
+        kept=True,
+        scene_idx=rec.scene_idx,
+        tracklet_id=rec.tracklet_id,
+        frame_idx=rec.frame_idx,
+        timestamp_seconds=rec.timestamp_seconds,
+        bbox=rec.bbox,
+        ccip_distance=rec.ccip_distance,
+        sharpness=rec.sharpness,
+        visibility=rec.visibility,
+        aspect=rec.aspect,
+        score=rec.score,
+        video_stem=rec.video_stem,
+        character_slug=new_slug,
+    )
+    MetadataLog(project.metadata_path).append(new_rec)
+    return new_rec
+
+
+@router.post("/{slug}/frames/{filename}/duplicate")
+async def duplicate_frame_for_character(
+    request: Request, slug: str, filename: str, body: MoveFrameBody,
+) -> dict:
+    """Also-assign a frame to a second character via a physical copy."""
+    project = _load(request, slug)
+    _ensure_character_or_404(project, body.character_slug)
+    rec = _find_record(project, filename)
+    if rec is None:
+        raise HTTPException(status_code=404, detail="frame metadata not found")
+    new_rec = _duplicate_for_character(project, rec, body.character_slug)
+    return _record_to_dict(new_rec)
+
+
+@router.post("/{slug}/frames/bulk-duplicate")
+async def bulk_duplicate_for_character(
+    request: Request, slug: str, body: BulkMoveBody,
+) -> dict:
+    """Also-assign many frames to a target character. Returns the new
+    filenames so the caller can refresh the view to show them inline."""
+    project = _load(request, slug)
+    _ensure_character_or_404(project, body.character_slug)
+    duplicated: list[str] = []
+    missing: list[str] = []
+    for fn in body.filenames:
+        rec = _find_record(project, fn)
+        if rec is None:
+            missing.append(fn)
+            continue
+        new_rec = _duplicate_for_character(project, rec, body.character_slug)
+        duplicated.append(new_rec.filename)
+    return {"duplicated": duplicated, "missing": missing}

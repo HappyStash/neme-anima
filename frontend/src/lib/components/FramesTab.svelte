@@ -1,8 +1,10 @@
 <script lang="ts">
+  import { UNSORTED_FILTER_SENTINEL } from "$lib/api";
   import * as api from "$lib/api";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
+  import CharacterStrip from "./CharacterStrip.svelte";
   import FrameThumb from "./FrameThumb.svelte";
   import FullSizeModal from "./FullSizeModal.svelte";
 
@@ -16,15 +18,38 @@
   let dragDepth = $state(0); // counter so child enter/leave doesn't flicker
   let dragActive = $derived(dragDepth > 0);
 
+  /** Translate the UI's character-filter chip into the API query value.
+   *  - "all" → undefined (no filter, server returns every kept frame)
+   *  - "unsorted" → server sentinel for orphan rows
+   *  - any other → real character slug */
+  function filterToQuery(filter: string): string | undefined {
+    if (filter === "all") return undefined;
+    if (filter === "unsorted") return UNSORTED_FILTER_SENTINEL;
+    return filter;
+  }
+
   $effect(() => {
     const slug = projectsStore.active?.slug;
     if (slug) {
       framesStore.refresh(slug, {
         source: viewStore.sourceFilter ?? undefined,
         query: viewStore.tagQuery || undefined,
+        characterSlug: filterToQuery(viewStore.characterFilter),
       });
     }
   });
+
+  /** Build the character chip set for the Frames-tab strip — leading
+   *  pseudo-chips ("All", "unsorted") plus one per real character. The
+   *  character chips themselves come from CharacterStrip (read-only here). */
+  let leadingChips = $derived([
+    { key: "all", label: "All" },
+    { key: "unsorted", label: "Unsorted" },
+  ]);
+
+  function selectCharacterFilter(key: string) {
+    viewStore.characterFilter = key;
+  }
 
   function handleSelect(index: number, mods: { shift: boolean; ctrl: boolean }) {
     // Plain middle/toggle click toggles a single tile; shift extends a range.
@@ -49,6 +74,7 @@
       await framesStore.refresh(slug, {
         source: viewStore.sourceFilter ?? undefined,
         query: viewStore.tagQuery || undefined,
+        characterSlug: filterToQuery(viewStore.characterFilter),
       });
     }
   }
@@ -99,11 +125,21 @@
     const placeholders = images.map((f) => ({ id: ++nextDropId, name: f.name }));
     pendingDrops = [...pendingDrops, ...placeholders];
 
+    // Drag-drop routing follows the active filter:
+    //   - single character selected → drop onto that character (deterministic)
+    //   - "All" or "Unsorted" → fall back to the project's first character;
+    //     a future revision can CCIP-route per the design doc, but explicit
+    //     beats implicit while there's no UI to surface a misroute.
+    const filter = viewStore.characterFilter;
+    const explicitTarget =
+      filter !== "all" && filter !== "unsorted" ? filter : undefined;
+
     try {
-      const resp = await api.uploadFrames(slug, images);
+      const resp = await api.uploadFrames(slug, images, explicitTarget);
       await framesStore.refresh(slug, {
         source: viewStore.sourceFilter ?? undefined,
         query: viewStore.tagQuery || undefined,
+        characterSlug: filterToQuery(viewStore.characterFilter),
       });
       // Upload succeeded, but the per-image LLM-describe call may have
       // failed silently (endpoint timeout, wrong model, auth refused).
@@ -144,6 +180,18 @@
   role="region"
   aria-label="Frames grid"
 >
+  {#if (projectsStore.active?.characters.length ?? 0) > 1}
+    <!-- Character filter row — only renders when the project actually has
+         multiple characters, so single-character workflows stay clean. -->
+    <div class="mb-3">
+      <CharacterStrip
+        leadingChips={leadingChips}
+        activeKey={viewStore.characterFilter}
+        onselect={selectCharacterFilter}
+      />
+    </div>
+  {/if}
+
   {#if framesStore.loading}
     <p class="text-slate-500 py-12 text-center">Loading frames…</p>
   {:else if framesStore.items.length === 0 && pendingDrops.length === 0}

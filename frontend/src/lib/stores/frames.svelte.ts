@@ -30,7 +30,7 @@ class FramesStore {
 
   async refresh(
     slug: string,
-    opts: { source?: string; query?: string } = {},
+    opts: { source?: string; query?: string; characterSlug?: string } = {},
   ) {
     this.loading = true;
     try {
