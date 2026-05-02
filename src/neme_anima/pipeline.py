@@ -260,22 +260,53 @@ def _run_tag_stage(
             message="Review kept frames, then resume to tag remaining",
         )
 
+    from neme_anima.storage.project import CROP_SUFFIX
+
     prefix = f"{video_stem}__"
     if not project.kept_dir.exists():
         progress.stage_start("tag", "Tagging", total=0, message="no kept frames")
         progress.stage_done("tag", message="0 frames")
         return
 
+    # Sweep any stray ``<frame>_crop.txt`` sidecars left by an older
+    # build of this stage (which mis-tagged crop derivatives as standalone
+    # samples). They're inert at training time but confusing on disk —
+    # nuking them on every fresh tag run keeps the layout invariant
+    # (one .txt per *original*, never per derivative).
+    swept_crop_sidecars = 0
+    for stale in project.kept_dir.iterdir():
+        if not stale.is_file():
+            continue
+        if not stale.name.startswith(prefix):
+            continue
+        if stale.suffix == ".txt" and stale.stem.endswith(CROP_SUFFIX):
+            try:
+                stale.unlink()
+                swept_crop_sidecars += 1
+            except OSError:
+                pass
+
+    # Iterate originals only. Crop derivatives are an internal "use this
+    # image instead, but the original's sidecar is the source of truth"
+    # substitution — tagging them as separate samples doubled the sidecar
+    # count and produced phantom training pairs the staging step had to
+    # silently filter out.
     pending = sorted(
         p for p in project.kept_dir.iterdir()
-        if p.is_file() and p.suffix == ".png" and p.name.startswith(prefix)
+        if p.is_file()
+        and p.suffix == ".png"
+        and p.name.startswith(prefix)
+        and not p.stem.endswith(CROP_SUFFIX)
     )
     progress.stage_start(
         "tag", "Tagging", total=len(pending),
         message=f"0 / {len(pending)} frames",
     )
     if not pending:
-        progress.stage_done("tag", message="0 frames")
+        msg = "0 frames"
+        if swept_crop_sidecars:
+            msg += f" · cleaned {swept_crop_sidecars} stray crop sidecar(s)"
+        progress.stage_done("tag", message=msg)
         return
 
     tagger = Tagger(thresholds.tag)
@@ -284,12 +315,18 @@ def _run_tag_stage(
         task = p.add_task("tag", total=len(pending))
         tagged = 0
         for png in pending:
-            with Image.open(png) as im:
+            # Pick the image source: the crop derivative if one exists
+            # (its pixels are what the dataset will train on), else the
+            # original. The sidecar always lands at the original's path
+            # — there is only ever one .txt per kept frame.
+            crop_png = png.with_name(f"{png.stem}{CROP_SUFFIX}.png")
+            image_src = crop_png if crop_png.is_file() else png
+            with Image.open(image_src) as im:
                 arr = np.array(im.convert("RGB"))
             tag_res = tagger.tag(arr)
             description = ""
             if llm_active:
-                description = _safe_describe(png, project, tag_res.text)
+                description = _safe_describe(image_src, project, tag_res.text)
             png.with_suffix(".txt").write_text(
                 join_sidecar(tag_res.text, description), encoding="utf-8",
             )
@@ -297,7 +334,10 @@ def _run_tag_stage(
             p.advance(task)
             progress.stage_advance("tag")
             progress.stage_message("tag", f"{tagged} / {len(pending)} frames")
-    progress.stage_done("tag", message=f"{tagged} frame{'s' if tagged != 1 else ''} tagged")
+    done_msg = f"{tagged} frame{'s' if tagged != 1 else ''} tagged"
+    if swept_crop_sidecars:
+        done_msg += f" · cleaned {swept_crop_sidecars} stray crop sidecar(s)"
+    progress.stage_done("tag", message=done_msg)
 
 
 def _safe_describe(png: Path, project, danbooru_tags: str) -> str:
