@@ -45,6 +45,9 @@
   function onKey(ev: KeyboardEvent) {
     const target = ev.target as HTMLElement | null;
     if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) return;
+    // Don't run global frames shortcuts (a / d / Escape) when a modal is open —
+    // otherwise Escape would close the modal AND clear the selection.
+    if (document.querySelector('[role="dialog"]')) return;
     if (viewStore.tab !== "frames") return;
     if (ev.key === "a" && !ev.ctrlKey && !ev.metaKey) {
       framesStore.selectAll();
