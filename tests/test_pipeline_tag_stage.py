@@ -169,3 +169,71 @@ def test_tag_stage_only_touches_files_for_this_video_stem(
     assert (project.kept_dir / "ep01__a.txt").read_text(encoding="utf-8").startswith(
         "fake_tag, another",
     )
+
+
+def test_tag_stage_skips_frames_owned_by_preserved_character(
+    tmp_path: Path, monkeypatch,
+):
+    """The user's reported bug: re-Run with a character's refs
+    disabled was correctly preserving the character's PNG/.txt files
+    on disk (scoped wipe), but the tag stage was then iterating every
+    PNG matching the prefix and re-tagging — silently overwriting the
+    user's curated tags. Fix: pass the preserve set into the tag stage
+    too, and skip frames whose owning character is in it. Files with
+    no metadata still get tagged (we can't attribute them; conservative
+    tag is safer than conservative skip for fresh frames)."""
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.storage.project import DEFAULT_CHARACTER_SLUG
+
+    project = Project.create(tmp_path / "p", name="p")
+    project.add_character(name="Mio")
+    # 3 frames: one belongs to active default char (will be tagged),
+    # one belongs to inactive 'mio' (preserve, must NOT be retagged),
+    # one untracked (no metadata, conservative tag fallback).
+    _seed_kept_image(project, name="ep01__yui_a")
+    _seed_kept_image(project, name="ep01__mio_a")
+    _seed_kept_image(project, name="ep01__manual_drop")
+    log = MetadataLog(project.metadata_path)
+    log.append(FrameRecord(
+        filename="ep01__yui_a", kept=True,
+        scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+        ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+        score=0.9, video_stem="ep01",
+        character_slug=DEFAULT_CHARACTER_SLUG,
+    ))
+    log.append(FrameRecord(
+        filename="ep01__mio_a", kept=True,
+        scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+        ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+        score=0.9, video_stem="ep01", character_slug="mio",
+    ))
+    # Prime the preserved character's sidecar with curated content
+    # that the test will assert SURVIVES the tag pass.
+    (project.kept_dir / "ep01__mio_a.txt").write_text(
+        "user, curated, tags\n", encoding="utf-8",
+    )
+    monkeypatch.setattr(pipeline_mod, "Tagger", _StubTagger)
+
+    pipeline_mod._run_tag_stage(
+        project=project, video_stem="ep01",
+        thresholds=Thresholds(),
+        progress=pipeline_mod.NULL_PROGRESS,
+        pause=False,
+        preserve_owned_by={"mio"},
+    )
+
+    # Active character's frame retagged with the stub's output.
+    assert (project.kept_dir / "ep01__yui_a.txt").read_text(encoding="utf-8").startswith(
+        "fake_tag, another",
+    )
+    # Preserved character's sidecar UNCHANGED — the regression bar.
+    assert (project.kept_dir / "ep01__mio_a.txt").read_text(encoding="utf-8").startswith(
+        "user, curated, tags",
+    )
+    # Untracked file got tagged (no metadata to attribute it; treated
+    # as a fresh frame that needs tags).
+    assert (project.kept_dir / "ep01__manual_drop.txt").read_text(encoding="utf-8").startswith(
+        "fake_tag, another",
+    )

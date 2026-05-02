@@ -260,6 +260,7 @@ def _run_extract_inner(
     _run_tag_stage(
         project=project, video_stem=video_stem, thresholds=thresholds,
         progress=progress, pause=project.pause_before_tag,
+        preserve_owned_by=preserve_slugs,
     )
 
     progress.finish({
@@ -278,12 +279,20 @@ def _run_extract_inner(
 def _run_tag_stage(
     *, project: Project, video_stem: str, thresholds: Thresholds,
     progress: PipelineProgress, pause: bool,
+    preserve_owned_by: set[str] | None = None,
 ) -> None:
     """Tag every kept frame currently on disk for ``video_stem``.
 
     Splitting tagging out of the identify loop lets the UI pause here so the
     user can delete unwanted frames before they get tagged. Files the user
     deleted between identify and resume simply aren't picked up by this scan.
+
+    ``preserve_owned_by`` mirrors the scoped-wipe contract: frames whose
+    owning character (per metadata last-write-wins) is in the set are
+    SKIPPED — they belong to characters that aren't active in this run,
+    and overwriting their auto-tags or hand-curated sidecars would
+    silently destroy the work the user explicitly chose to keep by
+    opting their character out.
     """
     if pause:
         progress.wait_for_resume(
@@ -321,13 +330,32 @@ def _run_tag_stage(
     # substitution — tagging them as separate samples doubled the sidecar
     # count and produced phantom training pairs the staging step had to
     # silently filter out.
-    pending = sorted(
+    pending = [
         p for p in project.kept_dir.iterdir()
         if p.is_file()
         and p.suffix == ".png"
         and p.name.startswith(prefix)
         and not p.stem.endswith(CROP_SUFFIX)
-    )
+    ]
+
+    # Skip frames owned by characters that aren't active in this run —
+    # their tag sidecars are user-curated work that the scoped wipe just
+    # explicitly preserved. Re-tagging would silently overwrite that
+    # work with auto-WD14 output. Files with no metadata fall through
+    # the filter (we can't attribute them, and conservative-tag is
+    # safer than conservative-skip — a brand-new frame should get tags).
+    skipped_preserved = 0
+    if preserve_owned_by:
+        owners = _kept_frame_owners(project, video_stem)
+        kept_pending: list[Path] = []
+        for png in pending:
+            owner = owners.get(png.stem)
+            if owner is not None and owner in preserve_owned_by:
+                skipped_preserved += 1
+                continue
+            kept_pending.append(png)
+        pending = kept_pending
+    pending.sort()
     progress.stage_start(
         "tag", "Tagging", total=len(pending),
         message=f"0 / {len(pending)} frames",
@@ -336,6 +364,8 @@ def _run_tag_stage(
         msg = "0 frames"
         if swept_crop_sidecars:
             msg += f" · cleaned {swept_crop_sidecars} stray crop sidecar(s)"
+        if skipped_preserved:
+            msg += f" · skipped {skipped_preserved} preserved frame(s)"
         progress.stage_done("tag", message=msg)
         return
 
@@ -367,6 +397,8 @@ def _run_tag_stage(
     done_msg = f"{tagged} frame{'s' if tagged != 1 else ''} tagged"
     if swept_crop_sidecars:
         done_msg += f" · cleaned {swept_crop_sidecars} stray crop sidecar(s)"
+    if skipped_preserved:
+        done_msg += f" · skipped {skipped_preserved} preserved frame(s)"
     progress.stage_done("tag", message=done_msg)
 
 
@@ -700,6 +732,7 @@ def _run_rerun_inner(
     _run_tag_stage(
         project=project, video_stem=video_stem, thresholds=thresholds,
         progress=progress, pause=project.pause_before_tag,
+        preserve_owned_by=preserve_slugs,
     )
 
     progress.finish({
