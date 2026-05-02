@@ -120,61 +120,64 @@ def test_move_or_delete_delete_mode(tmp_path: Path):
     assert not (project.rejected_dir / png.name).exists()
 
 
-def test_dedup_disabled_is_noop(tmp_path: Path):
-    """Disabled config must touch nothing — short-circuit before any I/O."""
-    project_root = tmp_path / "proj"
-    project = Project.create(project_root, name="t")
-    png = project.kept_dir / "vid__s000_t000_f000000.png"
-    Image.new("RGB", (16, 16), (10, 20, 30)).save(png)
-
-    report = dedup_kept_for_video(
-        project=project, video_stem="vid",
-        cfg=DedupConfig(enabled=False, distance_threshold=0.05),
-    )
-    assert report.removed == 0
-    assert report.inspected == 0
-    assert png.exists()
-
-
 def test_dedup_no_kept_frames_is_noop(tmp_path: Path):
     """Empty kept_dir for the stem returns a clean zero report — guard against
-    empty-directory crashes inside CCIP batch extract."""
+    empty-directory crashes inside CCIP batch extract. Dedup is always on
+    now, so this is the closest thing to a "do-nothing" path."""
     project_root = tmp_path / "proj"
     project = Project.create(project_root, name="t")
     report = dedup_kept_for_video(
         project=project, video_stem="vid",
-        cfg=DedupConfig(enabled=True, distance_threshold=0.05),
+        cfg=DedupConfig(distance_threshold=0.05),
     )
     assert report.inspected == 0
     assert report.removed == 0
 
 
 def test_thresholds_dedup_round_trips_through_json(tmp_path: Path):
-    """New section must survive ``Thresholds.to_json`` → ``from_json`` so a
-    project's saved overrides don't lose the dedup field after a restart."""
+    """The dedup section must survive ``Thresholds.to_json`` →
+    ``from_json`` so a project's saved overrides don't lose the
+    threshold tweaks after a restart."""
     t = Thresholds()
-    t.dedup.enabled = True
     t.dedup.distance_threshold = 0.07
     t.dedup.move_to_rejected = False
 
     path = tmp_path / "t.json"
     t.to_json(path)
     loaded = Thresholds.from_json(path)
-    assert loaded.dedup.enabled is True
     assert loaded.dedup.distance_threshold == 0.07
     assert loaded.dedup.move_to_rejected is False
 
 
 def test_thresholds_from_json_tolerates_missing_dedup_section(tmp_path: Path):
     """Older projects' threshold files don't have a dedup section — load with
-    defaults rather than crashing on the new field."""
+    defaults rather than crashing."""
     path = tmp_path / "t.json"
     path.write_text(json.dumps({
         "scene": {"threshold": 27.0, "min_scene_len_frames": 8},
     }))
     loaded = Thresholds.from_json(path)
-    assert loaded.dedup.enabled is False
     assert loaded.dedup.distance_threshold == 0.05
+    assert loaded.dedup.move_to_rejected is True
+
+
+def test_thresholds_from_json_tolerates_legacy_enabled_field(tmp_path: Path):
+    """A project saved before dedup became always-on may have
+    ``dedup.enabled`` in its persisted JSON — must load without
+    crashing on the unknown kwarg. The field is silently dropped."""
+    path = tmp_path / "t.json"
+    path.write_text(json.dumps({
+        "dedup": {
+            "enabled": False,           # legacy key; should be ignored
+            "distance_threshold": 0.07,
+            "move_to_rejected": False,
+        },
+    }))
+    loaded = Thresholds.from_json(path)
+    assert loaded.dedup.distance_threshold == 0.07
+    assert loaded.dedup.move_to_rejected is False
+    # ``enabled`` field is gone from the dataclass entirely.
+    assert not hasattr(loaded.dedup, "enabled")
 
 
 def test_dedup_metadata_appends_kept_false_record_for_drops(tmp_path: Path):

@@ -132,14 +132,13 @@ def test_state_remains_current_after_tag_change(tmp_path: Path):
     ) == "current"
 
 
-def test_state_remains_current_after_dedup_toggle(tmp_path: Path):
-    """Dedup is post-identify — flipping the toggle on or moving the
-    threshold doesn't require a re-scan."""
+def test_state_remains_current_after_dedup_threshold_change(tmp_path: Path):
+    """Dedup is post-identify — moving its threshold doesn't require a
+    re-scan. (Dedup is always on; the only knob is the threshold.)"""
     project = Project.create(tmp_path / "p", name="x")
     _make_parquet(project, "ep01")
     stamp_meta(project, "ep01", Thresholds())
     later = Thresholds()
-    later.dedup.enabled = True
     later.dedup.distance_threshold = 0.07
     assert cache_state(
         project=project, video_stem="ep01", current_thresholds=later,

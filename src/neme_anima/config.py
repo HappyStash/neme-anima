@@ -3,8 +3,19 @@
 from __future__ import annotations
 
 import json
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
+
+
+def _filter_known(dc_cls: type, raw: dict) -> dict:
+    """Drop keys that aren't declared on ``dc_cls``.
+
+    Lets ``from_json`` tolerate legacy fields without crashing — e.g.
+    ``dedup.enabled`` was a real config in earlier releases and may still
+    sit in saved JSON, but it isn't a kwarg the dataclass accepts now.
+    """
+    declared = {f.name for f in fields(dc_cls)}
+    return {k: v for k, v in raw.items() if k in declared}
 
 
 @dataclass
@@ -73,10 +84,12 @@ class DedupConfig:
 
     Cross-tracklet near-duplicates leak past the in-tracklet frame-gap dedup —
     OP/ED frames repeating across episodes, near-identical poses across cuts,
-    etc. Off by default so users opt in once they've seen what the threshold
-    removes; matches survive to ``rejected/`` rather than being deleted.
+    etc. Always on: there's no useful workflow where keeping near-pixel-
+    identical duplicates is desirable, and the conservative default
+    threshold (0.05 CCIP distance) only collapses crops that are
+    essentially the same image. Matches still go to ``rejected/`` so the
+    user can recover them if needed.
     """
-    enabled: bool = False
     distance_threshold: float = 0.05  # CCIP distance below this = duplicate
     move_to_rejected: bool = True     # False = delete; True = move to rejected/
 
@@ -98,14 +111,19 @@ class Thresholds:
     @classmethod
     def from_json(cls, path: Path) -> "Thresholds":
         data = json.loads(path.read_text())
+        tag_raw = data.get("tag", {})
         return cls(
-            scene=SceneConfig(**data.get("scene", {})),
-            detect=DetectConfig(**data.get("detect", {})),
-            track=TrackConfig(**data.get("track", {})),
-            identify=IdentifyConfig(**data.get("identify", {})),
-            frame_select=FrameSelectConfig(**data.get("frame_select", {})),
-            crop=CropConfig(**data.get("crop", {})),
-            tag=TagConfig(**{**data.get("tag", {}),
-                            "exclude_tags": tuple(data.get("tag", {}).get("exclude_tags", ()))}),
-            dedup=DedupConfig(**data.get("dedup", {})),
+            scene=SceneConfig(**_filter_known(SceneConfig, data.get("scene", {}))),
+            detect=DetectConfig(**_filter_known(DetectConfig, data.get("detect", {}))),
+            track=TrackConfig(**_filter_known(TrackConfig, data.get("track", {}))),
+            identify=IdentifyConfig(**_filter_known(IdentifyConfig, data.get("identify", {}))),
+            frame_select=FrameSelectConfig(
+                **_filter_known(FrameSelectConfig, data.get("frame_select", {}))
+            ),
+            crop=CropConfig(**_filter_known(CropConfig, data.get("crop", {}))),
+            tag=TagConfig(**{
+                **_filter_known(TagConfig, tag_raw),
+                "exclude_tags": tuple(tag_raw.get("exclude_tags", ())),
+            }),
+            dedup=DedupConfig(**_filter_known(DedupConfig, data.get("dedup", {}))),
         )

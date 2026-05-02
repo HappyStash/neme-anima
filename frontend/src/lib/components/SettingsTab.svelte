@@ -78,10 +78,8 @@
           help: "WD14 confidence cutoff for character tags. Kept high to avoid false character matches." },
       ]},
     { key: "dedup", label: "Dedup (kept crops)", fields: [
-        { name: "enabled", type: "boolean", placeholder: "false",
-          help: "Run a perceptual-dedup pass over kept crops between identify and tag. Catches OP/ED leakage and near-identical poses across tracklets that the in-tracklet frame-gap dedup misses. Off by default." },
         { name: "distance_threshold", type: "number", placeholder: "0.05",
-          help: "CCIP distance below which two crops are considered duplicates. Default 0.05 only collapses near-pixel-identical crops; well below the 0.15 same-character threshold so different poses survive." },
+          help: "CCIP distance below which two crops are considered duplicates. Always-on dedup runs between identify and tag — this knob just tunes how aggressive it is. Default 0.05 only collapses near-pixel-identical crops; well below the 0.15 same-character threshold so different poses survive." },
         { name: "move_to_rejected", type: "boolean", placeholder: "true",
           help: "When on, duplicates move to rejected/ so you can recover them. Off = duplicates are deleted outright." },
       ]},

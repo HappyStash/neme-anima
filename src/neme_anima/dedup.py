@@ -173,17 +173,15 @@ def dedup_kept_for_video(
 ) -> DedupReport:
     """Embed kept crops, group near-duplicates, demote the losers.
 
-    Returns the report regardless of whether dedup was enabled — a disabled
-    pass is a zero-removed run, which the orchestrator can use to keep the
-    progress UI honest. If CCIP isn't installed (CPU-only dev box), the
-    function still imports lazily so the rest of the pipeline doesn't break.
+    Always runs (no opt-in toggle). The distance threshold is the only
+    knob — there's no useful workflow where keeping near-pixel-identical
+    duplicates is desirable, and matches still go to ``rejected/`` rather
+    than being deleted (unless ``cfg.move_to_rejected`` is False) so the
+    user can recover them. If CCIP isn't installed (CPU-only dev box),
+    the lazy import inside the function keeps the rest of the pipeline
+    importable.
     """
     progress = progress or NULL_PROGRESS
-
-    if not cfg.enabled:
-        progress.stage_start("dedup", "Dedup", message="disabled")
-        progress.stage_done("dedup", message="disabled")
-        return DedupReport(inspected=0, groups_found=0, removed=0, threshold=cfg.distance_threshold)
 
     pngs = _kept_pngs_for_video(project, video_stem)
     if not pngs:
