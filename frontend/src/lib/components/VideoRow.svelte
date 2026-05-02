@@ -1,10 +1,10 @@
 <script lang="ts">
   import * as api from "$lib/api";
   import type { WipePreview } from "$lib/api";
+  import { colorForIndex } from "$lib/characterColors";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { jobsStore } from "$lib/stores/jobs.svelte";
-  import { viewStore } from "$lib/stores/view.svelte";
-  import type { RefImage, Source } from "$lib/types";
+  import type { Source } from "$lib/types";
   import ConfirmWipeModal from "./ConfirmWipeModal.svelte";
   import PipelineRunner from "./PipelineRunner.svelte";
   import RefStrip from "./RefStrip.svelte";
@@ -12,11 +12,17 @@
   type Props = {
     source: Source;
     sourceIdx: number;
-    /** Refs of the *active* character — they're what the per-video strip
-     *  toggles on/off via per-character opt-outs. */
-    projectRefs: readonly RefImage[];
   };
-  const { source, sourceIdx, projectRefs }: Props = $props();
+  const { source, sourceIdx }: Props = $props();
+
+  // Every character with at least one ref shows up in the per-video strip
+  // section so the user can opt refs in/out for any character without
+  // first switching the active chip. Characters with zero refs are dropped
+  // because there's nothing to toggle and the pipeline wouldn't process
+  // them for this video anyway.
+  let characters = $derived(
+    (projectsStore.active?.characters ?? []).filter((c) => c.refs.length > 0),
+  );
 
   // When set, the confirmation modal renders. Cancel clears it; confirm
   // calls the underlying action and clears it.
@@ -25,12 +31,21 @@
     preview: WipePreview;
   } | null>(null);
 
-  // Per-video opt-outs are now keyed by character slug — surface only the
-  // active character's list so the existing "active refs" math still
-  // works on a flat array of paths.
-  let activeExcluded = $derived(
-    source.excluded_refs[viewStore.activeCharacterSlug] ?? [],
-  );
+  // The Extract / Re-process pipeline runs across every character that has
+  // refs, not just the chip currently selected up top. So the buttons gate
+  // on whether *any* character has *any* active ref for this video —
+  // selecting a different chip in the strip never makes the buttons appear
+  // or disappear. activeRefs below is the across-characters total used for
+  // the gate; the per-character `activeCount` shown next to each strip
+  // serves the "did I leave Mio with no refs?" visibility need.
+  let activeRefs = $derived.by(() => {
+    let total = 0;
+    for (const c of projectsStore.active?.characters ?? []) {
+      const excluded = source.excluded_refs[c.slug] ?? [];
+      total += c.refs.length - excluded.length;
+    }
+    return total;
+  });
 
   let busy = $state(false);
   let thumbBroken = $state(false);
@@ -115,7 +130,6 @@
     if (projectsStore.active) await projectsStore.load(projectsStore.active.slug);
   }
 
-  let activeRefs = $derived(projectRefs.length - activeExcluded.length);
   let basename = $derived(source.path.split("/").pop() ?? source.path);
   let thumbUrl = $derived.by(() => {
     const slug = projectsStore.active?.slug;
@@ -149,7 +163,7 @@
     pipelineActive
       ? "Pipeline already running"
       : activeRefs === 0
-        ? "Add at least one active reference for the current character"
+        ? "Add or enable at least one reference image for any character"
         : cacheState === "current"
           ? "Already extracted with these scan settings — use Re-process to re-evaluate identification, frames, dedup, or tags"
           : cacheState === "stale"
@@ -171,7 +185,7 @@
     pipelineActive
       ? "Pipeline already running"
       : activeRefs === 0
-        ? "Add at least one active reference for the current character"
+        ? "Add or enable at least one reference image for any character"
         : cacheState === "none"
           ? "No detection cache yet — run Extract first to build it"
           : cacheState === "stale"
@@ -207,14 +221,38 @@
       <div class="flex items-center gap-2 min-w-0">
         <span class="text-sm text-slate-200 font-medium truncate" title={source.path}>{basename}</span>
       </div>
-      <div class="text-xs text-slate-500">
-        {activeRefs} of {projectRefs.length} ref{projectRefs.length === 1 ? "" : "s"} active
-      </div>
-      <RefStrip
-        sourceIdx={sourceIdx}
-        refPaths={projectRefs.map((r) => r.path)}
-        excluded={activeExcluded}
-      />
+      <!-- One labeled strip per character with refs. The label carries the
+           character's palette dot so the row's strips line up visually
+           with the chip up top and the FrameThumb badges in the Frames
+           tab. The index is sourced from the project's full character
+           list (not the filtered `characters` derivation) so colors stay
+           consistent even when some characters are skipped for having
+           zero refs. -->
+      {#each characters as c (c.slug)}
+        {@const fullIdx = projectsStore.active?.characters.findIndex((x) => x.slug === c.slug) ?? 0}
+        {@const color = colorForIndex(fullIdx)}
+        {@const excluded = source.excluded_refs[c.slug] ?? []}
+        {@const activeCount = c.refs.length - excluded.length}
+        <div class="flex items-center gap-2 min-w-0 flex-wrap">
+          <span class="inline-flex items-center gap-1.5 text-[11px] text-slate-400 min-w-[5.5rem]">
+            <span
+              class="w-2 h-2 rounded-full flex-shrink-0 {color.dot}"
+              aria-hidden="true"
+            ></span>
+            <span class="truncate" title={c.name}>{c.name}</span>
+            <span class="text-slate-500 tabular-nums text-[10px]">
+              {activeCount}/{c.refs.length}
+            </span>
+          </span>
+          <RefStrip
+            sourceIdx={sourceIdx}
+            characterSlug={c.slug}
+            refPaths={c.refs.map((r) => r.path)}
+            excluded={excluded}
+            activeRingRgba={color.ring}
+          />
+        </div>
+      {/each}
     </div>
     {#if job}
       <PipelineRunner {job} />

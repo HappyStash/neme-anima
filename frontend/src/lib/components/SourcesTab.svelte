@@ -215,7 +215,7 @@
       <p class="text-slate-500 text-sm py-8 text-center">No videos yet. Pick a folder above.</p>
     {:else}
       {#each projectsStore.active.sources as s, i (s.path)}
-        <VideoRow source={s} sourceIdx={i} projectRefs={activeRefs} />
+        <VideoRow source={s} sourceIdx={i} />
       {/each}
     {/if}
   {/if}
