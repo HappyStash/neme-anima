@@ -236,12 +236,31 @@ class Character:
     directory key for staged training datasets). The trigger token is what
     the user puts in their LoRA prompt to invoke this character; if empty
     the trainer falls back to the slug.
+
+    Core-tag pruning fields:
+      * ``core_tags`` is a persisted list of tags that the user has
+        approved as "implied by the trigger word". When pruning is enabled,
+        the dataset-staging step strips these from each frame's caption.
+      * ``core_tags_freq_threshold`` is the frequency cutoff used by the
+        compute-preview step. Defaults to 0.35 — anime2sd's value.
+      * ``core_tags_enabled`` gates whether pruning is applied at staging
+        time. Off by default so users opt in once they've reviewed the
+        suggested list.
+
+    Balancing:
+      * ``multiply`` is a per-character training-set repeat multiplier.
+        ``0.0`` means "auto" — the balancing pass computes a value from
+        relative frame counts. A positive value is a manual override.
     """
     slug: str
     name: str
     refs: list[RefImage] = field(default_factory=list)
     trigger_token: str = ""
     training: TrainingConfig = field(default_factory=TrainingConfig)
+    core_tags: list[str] = field(default_factory=list)
+    core_tags_freq_threshold: float = 0.35
+    core_tags_enabled: bool = False
+    multiply: float = 0.0
 
 
 @dataclass
@@ -346,6 +365,15 @@ class Project:
                     refs=[RefImage(**r) for r in raw.get("refs", [])],
                     trigger_token=str(raw.get("trigger_token") or ""),
                     training=training,
+                    # Core-tag fields default-tolerantly so a project saved
+                    # before this change loads with sane defaults rather
+                    # than crashing on the new keys.
+                    core_tags=[str(t) for t in raw.get("core_tags", [])],
+                    core_tags_freq_threshold=float(
+                        raw.get("core_tags_freq_threshold", 0.35),
+                    ),
+                    core_tags_enabled=bool(raw.get("core_tags_enabled", False)),
+                    multiply=float(raw.get("multiply", 0.0)),
                 ))
             return chars
         # Legacy single-character migration.

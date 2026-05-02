@@ -208,10 +208,19 @@ def render_dataset_toml(project: Project, *, dataset_root: Path | None = None) -
     backwards compatibility, but training will then see both the original
     and the ``_crop`` derivative as separate samples (the historical bug).
 
+    Multi-character projects emit one ``[[directory]]`` block per
+    character pointing at the per-character staging subdirectory built by
+    :func:`build_dataset_staging`, with ``num_repeats`` set to that
+    character's effective balancing multiplier. Single-character projects
+    keep a single block pointing at the staging root for backwards
+    compatibility.
+
     AR bucketing values come from the project's ``TrainingConfig`` so
     ``num_ar_buckets`` and ``min_ar``/``max_ar`` stay in sync with the run
     config.
     """
+    from neme_anima.balancing import compute_character_balancing
+
     cfg = project.training
     root = dataset_root if dataset_root is not None else project.kept_dir
     lines = [
@@ -224,11 +233,49 @@ def render_dataset_toml(project: Project, *, dataset_root: Path | None = None) -
         _toml_kv("max_ar", cfg.max_ar),
         _toml_kv("num_ar_buckets", cfg.num_ar_buckets),
         "",
-        "[[directory]]",
-        _toml_kv("path", str(Path(root).resolve())),
-        _toml_kv("num_repeats", 1),
-        "",
     ]
+    multi_character = len(project.characters) > 1
+    if multi_character:
+        # One block per character. Each subdir under ``root`` carries that
+        # character's frames; ``num_repeats`` is the balancing multiplier.
+        # Characters with zero frames get skipped — emitting an empty
+        # directory would make diffusion-pipe scan an empty path and warn.
+        rows = compute_character_balancing(project=project)
+        any_emitted = False
+        for row in rows:
+            if row.frame_count <= 0:
+                continue
+            char_dir = Path(root) / row.character_slug
+            lines += [
+                f"# Character: {row.name} ({row.character_slug}) — "
+                f"{row.frame_count} frame{'s' if row.frame_count != 1 else ''}, "
+                f"multiply = {row.effective_multiply}",
+                "[[directory]]",
+                _toml_kv("path", str(char_dir.resolve())),
+                _toml_kv("num_repeats", row.effective_multiply),
+                "",
+            ]
+            any_emitted = True
+        if not any_emitted:
+            # No character has frames yet — emit a single placeholder
+            # block at the root so diffusion-pipe doesn't choke on an
+            # empty TOML; the user will see a "no images" error which is
+            # the right signal here.
+            lines += [
+                "[[directory]]",
+                _toml_kv("path", str(Path(root).resolve())),
+                _toml_kv("num_repeats", 1),
+                "",
+            ]
+    else:
+        # Single-character: keep the historical flat layout so existing
+        # callers and the dataset preview UI keep working unchanged.
+        lines += [
+            "[[directory]]",
+            _toml_kv("path", str(Path(root).resolve())),
+            _toml_kv("num_repeats", 1),
+            "",
+        ]
     return "\n".join(lines)
 
 
@@ -280,6 +327,22 @@ def build_dataset_staging(project: Project, dest: Path) -> dict:
             "dest": str(dest.resolve()),
         }
 
+    # Pre-compute per-frame core-tag pruning context. We do this once per
+    # staging call (an O(n_frames) scan of the metadata log) so each
+    # frame's link_or_copy doesn't re-walk it. The map is empty when no
+    # character has core_tags_enabled — short-circuiting back to the
+    # symlink-only path so single-character no-pruning runs are
+    # byte-identical to the pre-core-tags pipeline.
+    prune_map = _build_prune_map(project)
+    pruned_count = 0
+    # Per-character staging only kicks in for multi-character projects;
+    # single-character projects keep the flat layout so existing callers
+    # (and tests) remain byte-identical. The owner-of-frame lookup is the
+    # same metadata-driven map used by core-tag pruning, just keyed by
+    # filename → slug instead of filename → core_tags.
+    multi_character = len(project.characters) > 1
+    owner_map = _build_owner_map(project) if multi_character else {}
+
     for img in sorted(kept.iterdir()):
         if not img.is_file():
             continue
@@ -290,13 +353,41 @@ def build_dataset_staging(project: Project, dest: Path) -> dict:
             continue  # handled via its parent
         crop = kept / f"{stem}{CROP_SUFFIX}.png"
         src_img = crop if crop.is_file() else img
+        # Choose the per-frame staging directory: a character subdir for
+        # multi-character projects (so dataset.toml can emit one
+        # ``[[directory]]`` block per character with its own num_repeats),
+        # the flat root for single-character projects.
+        if multi_character:
+            slug = owner_map.get(stem)
+            if slug is None:
+                # Frames whose owner can't be resolved drop into an
+                # ``unsorted`` subdir so they don't pollute any one
+                # character's training set.
+                slug = "unsorted"
+            frame_dir = dest / slug
+            frame_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            frame_dir = dest
         # Stage the image under the original stem so the trainer pairs it
         # with the original sidecar by stem-match.
-        link_img = dest / f"{stem}{src_img.suffix.lower()}"
+        link_img = frame_dir / f"{stem}{src_img.suffix.lower()}"
         _link_or_copy(src_img, link_img)
         src_txt = kept / f"{stem}.txt"
         if src_txt.is_file():
-            _link_or_copy(src_txt, dest / f"{stem}.txt")
+            core_tags = prune_map.get(stem)
+            if core_tags:
+                # Write a pruned copy to the staging dir rather than
+                # symlinking — pruning is non-destructive (the original
+                # sidecar in kept/ stays as the ground truth) and
+                # restricted to staging output.
+                from neme_anima.core_tags import prune_sidecar_text
+                pruned = prune_sidecar_text(
+                    src_txt.read_text(encoding="utf-8"), core_tags,
+                )
+                (frame_dir / f"{stem}.txt").write_text(pruned, encoding="utf-8")
+                pruned_count += 1
+            else:
+                _link_or_copy(src_txt, frame_dir / f"{stem}.txt")
         else:
             missing_txt += 1
         paired += 1
@@ -306,8 +397,55 @@ def build_dataset_staging(project: Project, dest: Path) -> dict:
         "images": paired,
         "with_crop": with_crop,
         "missing_txt": missing_txt,
+        "pruned": pruned_count,
         "dest": str(dest.resolve()),
     }
+
+
+def _build_owner_map(project: Project) -> dict[str, str]:
+    """Return ``{filename_stem: character_slug}`` for kept frames.
+
+    Last-write-wins per filename so a moved frame is staged under its
+    new owner. Used only when staging multi-character projects.
+    """
+    from neme_anima.storage.metadata import MetadataLog
+
+    log = MetadataLog(project.metadata_path)
+    owner: dict[str, str] = {}
+    for rec in log.iter_records():
+        if rec.kept:
+            owner[rec.filename] = rec.character_slug
+    return owner
+
+
+def _build_prune_map(project: Project) -> dict[str, list[str]]:
+    """Build ``{filename: core_tags_to_drop}`` for the staging pass.
+
+    Walks the metadata log once to determine each frame's owning
+    character (last-write-wins), then materialises that character's
+    core_tags list when pruning is enabled. Frames whose owners aren't
+    pruning-enabled don't appear in the map — callers fall through to
+    the symlink path.
+    """
+    from neme_anima.storage.metadata import MetadataLog
+
+    log = MetadataLog(project.metadata_path)
+    latest_owner: dict[str, str] = {}
+    for rec in log.iter_records():
+        if rec.kept:
+            latest_owner[rec.filename] = rec.character_slug
+    # Cache the per-character list lookup so an N-frame project is O(N+C)
+    # instead of O(N*C).
+    by_slug: dict[str, list[str]] = {}
+    for c in project.characters:
+        if c.core_tags_enabled and c.core_tags:
+            by_slug[c.slug] = list(c.core_tags)
+    out: dict[str, list[str]] = {}
+    for filename, slug in latest_owner.items():
+        tags = by_slug.get(slug)
+        if tags:
+            out[filename] = tags
+    return out
 
 
 def _link_or_copy(src: Path, dest: Path) -> None:
