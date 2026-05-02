@@ -13,14 +13,48 @@
   let characters = $derived(projectsStore.active?.characters ?? []);
   let multiCharacter = $derived(characters.length > 1);
 
-  // Two dropdown menus: "Move to" (single-owner correction) and "Also
-  // assign to" (duplicate). They share state so opening one closes the
-  // other and the user can't accidentally fire both at once.
-  let openMenu = $state<"move" | "copy" | null>(null);
+  // Single combined "Characters ▾" dropdown replaces the prior pair.
+  // Per-row UX:
+  //   - Click the row name → MOVE selected frames to that character
+  //     (single-owner reassignment, the common "fix a misroute" case).
+  //   - Click the small "+ Also" affordance on the right → ALSO ASSIGN
+  //     (duplicate so the frame lives under both characters with their
+  //     own captions).
+  //   - The character whose slug every selected frame already shares
+  //     shows a "● current" badge and is non-clickable for both actions
+  //     — no point moving frames to where they already are.
+  // For mixed selections, "current" is per-frame and we don't surface a
+  // single badge — we just enable both actions for every character.
+  let charactersOpen = $state(false);
   let menuBusy = $state(false);
 
-  function toggleMenu(which: "move" | "copy") {
-    openMenu = openMenu === which ? null : which;
+  /** The slug shared by every selected frame, or null if mixed/unknown.
+   *  Used to highlight "● current" in the dropdown so the user can see
+   *  which row is a no-op before they click. */
+  let sharedOwnerSlug = $derived.by(() => {
+    void framesStore.selectionVersion;
+    const sel = framesStore.selection.selected();
+    if (sel.size === 0) return null;
+    const slugs = framesStore.items
+      .filter((it) => sel.has(it.filename))
+      .map((it) => it.character_slug);
+    if (slugs.length === 0) return null;
+    const first = slugs[0];
+    return slugs.every((s) => s === first) ? first : null;
+  });
+
+  function currentFilterQuery(): string | undefined {
+    if (viewStore.characterFilter === "all") return undefined;
+    if (viewStore.characterFilter === "unsorted") return "__unsorted__";
+    return viewStore.characterFilter;
+  }
+
+  async function refreshAfterAssignment(slug: string) {
+    await framesStore.refresh(slug, {
+      source: viewStore.sourceFilter ?? undefined,
+      query: viewStore.tagQuery || undefined,
+      characterSlug: currentFilterQuery(),
+    });
   }
 
   async function moveSelectedTo(targetSlug: string) {
@@ -28,31 +62,19 @@
     if (!slug || menuBusy) return;
     const filenames = framesStore.selectedFilenames();
     if (filenames.length === 0) {
-      openMenu = null;
+      charactersOpen = false;
       return;
     }
     menuBusy = true;
     try {
       await api.bulkMoveFrames(slug, filenames, targetSlug);
-      // The frames now belong to a different character — refresh so they
-      // disappear from the current per-character view (or update their
-      // badges in "All" view).
-      await framesStore.refresh(slug, {
-        source: viewStore.sourceFilter ?? undefined,
-        query: viewStore.tagQuery || undefined,
-        characterSlug:
-          viewStore.characterFilter === "all"
-            ? undefined
-            : viewStore.characterFilter === "unsorted"
-              ? "__unsorted__"
-              : viewStore.characterFilter,
-      });
+      await refreshAfterAssignment(slug);
       framesStore.clear();
     } catch (e) {
       alert(`Move failed: ${e}`);
     } finally {
       menuBusy = false;
-      openMenu = null;
+      charactersOpen = false;
     }
   }
 
@@ -61,36 +83,26 @@
     if (!slug || menuBusy) return;
     const filenames = framesStore.selectedFilenames();
     if (filenames.length === 0) {
-      openMenu = null;
+      charactersOpen = false;
       return;
     }
     menuBusy = true;
     try {
       const res = await api.bulkDuplicateFrames(slug, filenames, targetSlug);
-      // Originals stay where they are; duplicates are new files. Always
-      // refresh so the user sees the copies appear (under "All" or under
-      // the target character's filter).
-      await framesStore.refresh(slug, {
-        source: viewStore.sourceFilter ?? undefined,
-        query: viewStore.tagQuery || undefined,
-        characterSlug:
-          viewStore.characterFilter === "all"
-            ? undefined
-            : viewStore.characterFilter === "unsorted"
-              ? "__unsorted__"
-              : viewStore.characterFilter,
-      });
+      // Originals stay; duplicates appear. Refresh shows them inline
+      // under "All" or the target's filter.
+      await refreshAfterAssignment(slug);
       if (res.missing.length > 0) {
         alert(
-          `Duplicated ${res.duplicated.length}; ` +
+          `Also-assigned ${res.duplicated.length}; ` +
           `${res.missing.length} skipped (no metadata).`,
         );
       }
     } catch (e) {
-      alert(`Assign failed: ${e}`);
+      alert(`Also-assign failed: ${e}`);
     } finally {
       menuBusy = false;
-      openMenu = null;
+      charactersOpen = false;
     }
   }
 
@@ -283,55 +295,66 @@
           >Describe</button>
         {/if}
         {#if multiCharacter}
-          <!-- Move + Also-assign live behind dropdowns to keep the chip
-               row tight. Each opens an inline menu listing every project
-               character. Move = single-owner correction (current frames
-               leave the active filter); Also assign = duplicate (originals
-               stay, copies appear under the target). -->
+          <!-- Single "Characters ▾" dropdown unifies move + also-assign.
+               Inside, each row exposes both actions:
+                 - clicking the row name MOVES (single-owner reassignment)
+                 - clicking the small "+ Also" pill DUPLICATES (additive)
+               The current shared owner (when every selected frame agrees)
+               is shown with a "● current" badge and both of its actions
+               disable, so the user can see at a glance which row is the
+               no-op. -->
           <div class="relative">
             <button
               type="button"
-              onclick={() => toggleMenu("move")}
+              onclick={() => (charactersOpen = !charactersOpen)}
               disabled={menuBusy}
-              title="Reassign these frames to a different character"
+              title="Reassign or also-assign these frames to a different character"
               class="bg-fuchsia-500/30 hover:bg-fuchsia-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-            >Move ▾</button>
-            {#if openMenu === "move"}
+            >Characters ▾</button>
+            {#if charactersOpen}
               <div
-                class="absolute top-full mt-1 left-0 bg-ink-900 border border-ink-700 rounded-lg shadow-xl py-1 min-w-[10rem] z-50"
+                class="absolute top-full mt-1 left-0 bg-ink-900 border border-ink-700 rounded-lg shadow-xl py-1 min-w-[14rem] z-50"
                 role="menu"
               >
+                <div class="px-3 py-1 text-[10px] uppercase tracking-wide text-slate-500 border-b border-ink-800 mb-1">
+                  Click name to move · + Also to duplicate
+                </div>
                 {#each characters as c (c.slug)}
-                  <button
-                    type="button"
-                    onclick={() => moveSelectedTo(c.slug)}
-                    class="block w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-ink-800"
+                  {@const isCurrent = sharedOwnerSlug === c.slug}
+                  <div
+                    class="flex items-center gap-1 px-1 py-0.5
+                      {isCurrent ? 'opacity-60' : ''}"
                     role="menuitem"
-                  >{c.name} <span class="text-slate-500">({c.ref_count})</span></button>
-                {/each}
-              </div>
-            {/if}
-          </div>
-          <div class="relative">
-            <button
-              type="button"
-              onclick={() => toggleMenu("copy")}
-              disabled={menuBusy}
-              title="Duplicate these frames into another character (originals stay)"
-              class="bg-cyan-500/30 hover:bg-cyan-500/55 rounded-full px-2.5 h-5 transition-colors inline-flex items-center disabled:opacity-50 disabled:cursor-not-allowed"
-            >Also assign ▾</button>
-            {#if openMenu === "copy"}
-              <div
-                class="absolute top-full mt-1 left-0 bg-ink-900 border border-ink-700 rounded-lg shadow-xl py-1 min-w-[10rem] z-50"
-                role="menu"
-              >
-                {#each characters as c (c.slug)}
-                  <button
-                    type="button"
-                    onclick={() => alsoAssignSelectedTo(c.slug)}
-                    class="block w-full text-left px-3 py-1.5 text-xs text-slate-200 hover:bg-ink-800"
-                    role="menuitem"
-                  >{c.name} <span class="text-slate-500">({c.ref_count})</span></button>
+                  >
+                    <button
+                      type="button"
+                      onclick={() => !isCurrent && moveSelectedTo(c.slug)}
+                      disabled={isCurrent || menuBusy}
+                      title={isCurrent
+                        ? "Already routed here — nothing to move"
+                        : `Move selected frames to ${c.name}`}
+                      class="flex-1 text-left px-2 py-1 text-xs rounded hover:bg-ink-800 disabled:hover:bg-transparent disabled:cursor-not-allowed flex items-center gap-2"
+                    >
+                      <span class="text-slate-200 truncate">{c.name}</span>
+                      <span class="text-slate-500 tabular-nums text-[10px]">
+                        ({c.ref_count})
+                      </span>
+                      {#if isCurrent}
+                        <span class="ml-auto text-[10px] text-emerald-400 inline-flex items-center gap-1">
+                          ● current
+                        </span>
+                      {/if}
+                    </button>
+                    <button
+                      type="button"
+                      onclick={() => !isCurrent && alsoAssignSelectedTo(c.slug)}
+                      disabled={isCurrent || menuBusy}
+                      title={isCurrent
+                        ? "Already routed here — duplicating would create another copy with no purpose"
+                        : `Also assign selected frames to ${c.name} (duplicate)`}
+                      class="flex-shrink-0 px-2 py-0.5 text-[10px] rounded bg-cyan-500/20 hover:bg-cyan-500/40 text-cyan-200 transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    >+ Also</button>
+                  </div>
                 {/each}
               </div>
             {/if}

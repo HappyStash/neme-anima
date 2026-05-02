@@ -4,7 +4,6 @@
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
-  import CharacterStrip from "./CharacterStrip.svelte";
   import FrameThumb from "./FrameThumb.svelte";
   import FullSizeModal from "./FullSizeModal.svelte";
 
@@ -39,17 +38,6 @@
     }
   });
 
-  /** Build the character chip set for the Frames-tab strip — leading
-   *  pseudo-chips ("All", "unsorted") plus one per real character. The
-   *  character chips themselves come from CharacterStrip (read-only here). */
-  let leadingChips = $derived([
-    { key: "all", label: "All" },
-    { key: "unsorted", label: "Unsorted" },
-  ]);
-
-  function selectCharacterFilter(key: string) {
-    viewStore.characterFilter = key;
-  }
 
   function handleSelect(index: number, mods: { shift: boolean; ctrl: boolean }) {
     // Plain middle/toggle click toggles a single tile; shift extends a range.
@@ -180,18 +168,6 @@
   role="region"
   aria-label="Frames grid"
 >
-  {#if (projectsStore.active?.characters.length ?? 0) > 1}
-    <!-- Character filter row — only renders when the project actually has
-         multiple characters, so single-character workflows stay clean. -->
-    <div class="mb-3">
-      <CharacterStrip
-        leadingChips={leadingChips}
-        activeKey={viewStore.characterFilter}
-        onselect={selectCharacterFilter}
-      />
-    </div>
-  {/if}
-
   {#if framesStore.loading}
     <p class="text-slate-500 py-12 text-center">Loading frames…</p>
   {:else if framesStore.items.length === 0 && pendingDrops.length === 0}
