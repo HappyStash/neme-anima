@@ -36,16 +36,24 @@
   let thumbBroken = $state(false);
 
   /** Fetch the wipe preview, then either short-circuit straight to the
-   *  job submission (nothing to wipe — first-time extract is the
-   *  common case) or open the confirmation modal. The modal's confirm
-   *  handler calls submitJob. Cancel just clears pendingAction. */
+   *  job submission (no kept frames will be wiped) or open the
+   *  confirmation modal. Rejected samples are ignored when deciding
+   *  whether to prompt — they're diagnostic, not curation, and a
+   *  popup that says "we'll delete some rejected samples" would just
+   *  be friction with no upside. */
+  function keptFramesToWipe(preview: api.WipePreview): number {
+    return Object.values(preview.to_wipe.by_character).reduce(
+      (a, b) => a + b, 0,
+    );
+  }
+
   async function run() {
     const slug = projectsStore.active?.slug;
     if (!slug || busy) return;
     busy = true;
     try {
       const preview = await api.sourceWipePreview(slug, sourceIdx);
-      if (preview.to_wipe.total === 0) {
+      if (keptFramesToWipe(preview) === 0) {
         await submitExtract(slug);
       } else {
         pendingAction = { kind: "Extract", preview };
@@ -61,7 +69,7 @@
     busy = true;
     try {
       const preview = await api.sourceWipePreview(slug, sourceIdx);
-      if (preview.to_wipe.total === 0) {
+      if (keptFramesToWipe(preview) === 0) {
         await submitRerun(slug);
       } else {
         pendingAction = { kind: "Re-process", preview };

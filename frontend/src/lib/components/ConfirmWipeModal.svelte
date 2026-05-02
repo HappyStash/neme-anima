@@ -35,6 +35,14 @@
       .filter(([, n]) => n > 0)
       .sort(([a], [b]) => a.localeCompare(b)),
   );
+
+  // The total displayed at the top is the kept-frame count only;
+  // rejected samples (diagnostic previews) are silently wiped and not
+  // worth surfacing — the modal exists to protect curation, and
+  // rejected samples are not curation.
+  let wipeTotalKept = $derived(
+    wipeRows.reduce((a, [, n]) => a + n, 0),
+  );
 </script>
 
 <!-- Backdrop click → cancel; Escape too. The modal floats above the
@@ -61,14 +69,14 @@
     </p>
 
     <div class="space-y-3 text-sm">
-      <!-- "About to wipe" section. Per-character counts plus the
-           rejected-samples total (always wiped because they're
-           diagnostic, not curated training data). -->
+      <!-- "About to wipe" section. Per-character counts only — rejected
+           samples are silently wiped because they're diagnostic, not
+           curation, and the modal exists to protect the latter. -->
       <div>
         <p class="text-xs uppercase tracking-wide text-amber-400 mb-1">
-          Will be replaced ({preview.to_wipe.total})
+          Will be replaced ({wipeTotalKept})
         </p>
-        {#if wipeRows.length === 0 && preview.to_wipe.rejected_samples === 0}
+        {#if wipeRows.length === 0}
           <p class="text-slate-400 text-sm">Nothing — fresh dataset.</p>
         {:else}
           <ul class="text-slate-300 text-sm pl-4">
@@ -79,13 +87,6 @@
                 <span class="text-slate-200">{nameFor(slug)}</span>
               </li>
             {/each}
-            {#if preview.to_wipe.rejected_samples > 0}
-              <li class="list-disc text-slate-500">
-                <span class="text-slate-400">{preview.to_wipe.rejected_samples}</span>
-                rejected sample{preview.to_wipe.rejected_samples === 1 ? "" : "s"}
-                <span class="text-slate-600">(diagnostic)</span>
-              </li>
-            {/if}
           </ul>
         {/if}
       </div>
