@@ -82,15 +82,23 @@ class TagConfig:
 class DedupConfig:
     """Perceptual dedup pass over kept crops using CCIP embeddings.
 
-    Cross-tracklet near-duplicates leak past the in-tracklet frame-gap dedup —
-    OP/ED frames repeating across episodes, near-identical poses across cuts,
-    etc. Always on: there's no useful workflow where keeping near-pixel-
-    identical duplicates is desirable, and the conservative default
-    threshold (0.05 CCIP distance) only collapses crops that are
-    essentially the same image. Matches still go to ``rejected/`` so the
-    user can recover them if needed.
+    Cross-tracklet near-duplicates leak past the in-tracklet frame-gap
+    dedup — repeated takes inside a single shot, near-identical poses
+    across adjacent cuts. Restricted to a temporal window so dedup only
+    collapses *locally* repeated frames: comparing every kept crop to
+    every other kept crop across the whole video also collapsed
+    legitimately distinct shots that happened to be visually similar
+    (a character against the same background twenty minutes apart),
+    which is rarely what you want.
+
+    ``lookback_frames`` is the maximum frame_idx delta between two
+    kept crops for them to be considered duplicate-eligible — at 24
+    fps, the default 1000 covers ~40 seconds, comfortably wider than
+    a typical anime shot. Set to 0 to compare across the whole video
+    (legacy behaviour, useful for very short clips).
     """
     distance_threshold: float = 0.05  # CCIP distance below this = duplicate
+    lookback_frames: int = 1000       # max frame_idx delta; 0 = unlimited
     move_to_rejected: bool = True     # False = delete; True = move to rejected/
 
 

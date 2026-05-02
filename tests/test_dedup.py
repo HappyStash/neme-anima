@@ -57,6 +57,69 @@ def test_find_duplicate_groups_strict_less_than():
     assert sorted(map(sorted, groups)) == [[0], [1]]
 
 
+def test_find_duplicate_groups_lookback_window_blocks_far_pairs():
+    """With ``lookback_frames`` set, a near-zero distance pair whose
+    frame_idx delta exceeds the window must NOT merge — that's the
+    whole point of windowing dedup.
+
+    Three frames: 0 and 2 have an exact-duplicate distance (0.0) but
+    are 5000 frames apart in the video; 1 sits between them at frame
+    100 with no near-match. Window = 1000 frames → 0 and 2 stay
+    distinct (would have merged under the legacy all-pairs algorithm)."""
+    d = np.array([
+        [0.0, 0.30, 0.0],
+        [0.30, 0.0, 0.30],
+        [0.0, 0.30, 0.0],
+    ])
+    frame_indices = [0, 100, 5000]
+    groups = find_duplicate_groups(
+        d, threshold=0.05,
+        frame_indices=frame_indices, lookback_frames=1000,
+    )
+    assert sorted(map(sorted, groups)) == [[0], [1], [2]]
+
+
+def test_find_duplicate_groups_lookback_window_keeps_close_pairs():
+    """The other side of the contract: a near-duplicate inside the
+    window still merges. Two frames 50 apart with distance 0.02 must
+    end up in one group when lookback_frames=1000."""
+    d = np.array([
+        [0.0, 0.02],
+        [0.02, 0.0],
+    ])
+    groups = find_duplicate_groups(
+        d, threshold=0.05,
+        frame_indices=[0, 50], lookback_frames=1000,
+    )
+    assert sorted(map(sorted, groups)) == [[0, 1]]
+
+
+def test_find_duplicate_groups_lookback_zero_disables_window():
+    """``lookback_frames=0`` is the explicit "compare everything" sentinel
+    — same behaviour as the legacy all-pairs API. Provided as an escape
+    hatch for very short clips where the window would isolate every
+    frame trivially."""
+    d = np.array([
+        [0.0, 0.0],
+        [0.0, 0.0],
+    ])
+    groups = find_duplicate_groups(
+        d, threshold=0.05,
+        frame_indices=[0, 99999], lookback_frames=0,
+    )
+    assert sorted(map(sorted, groups)) == [[0, 1]]
+
+
+def test_find_duplicate_groups_lookback_requires_frame_indices():
+    """Asking for windowed dedup without supplying frame_indices is a
+    programmer error — fail loud rather than silently dropping the
+    window restriction."""
+    import pytest
+    d = np.zeros((2, 2))
+    with pytest.raises(ValueError, match="frame_indices"):
+        find_duplicate_groups(d, threshold=0.05, lookback_frames=500)
+
+
 def test_select_keepers_singletons_always_kept():
     keep, drop = select_keepers([[0], [1], [2]], scores=[0.1, 0.5, 0.9])
     assert keep == {0, 1, 2}
@@ -140,12 +203,14 @@ def test_thresholds_dedup_round_trips_through_json(tmp_path: Path):
     threshold tweaks after a restart."""
     t = Thresholds()
     t.dedup.distance_threshold = 0.07
+    t.dedup.lookback_frames = 500
     t.dedup.move_to_rejected = False
 
     path = tmp_path / "t.json"
     t.to_json(path)
     loaded = Thresholds.from_json(path)
     assert loaded.dedup.distance_threshold == 0.07
+    assert loaded.dedup.lookback_frames == 500
     assert loaded.dedup.move_to_rejected is False
 
 
@@ -158,6 +223,7 @@ def test_thresholds_from_json_tolerates_missing_dedup_section(tmp_path: Path):
     }))
     loaded = Thresholds.from_json(path)
     assert loaded.dedup.distance_threshold == 0.05
+    assert loaded.dedup.lookback_frames == 1000
     assert loaded.dedup.move_to_rejected is True
 
 
@@ -215,6 +281,36 @@ def test_dedup_metadata_appends_kept_false_record_for_drops(tmp_path: Path):
     assert last_for_b.kept is False
     # The original score is preserved for traceability.
     assert last_for_b.score == 0.5
+
+
+def test_dedup_metadata_preserves_owning_character_slug(tmp_path: Path):
+    """Regression: the kept=False row written by dedup must inherit the
+    owning character's slug from the most-recent kept=True row.
+    Previously the demotion silently relabelled every dedup-rejected
+    frame as the project's default character, mis-attributing rejected-
+    by-dedup frames in per-character listings (a kiyotaka frame demoted
+    by dedup ended up listed under "default" in the rejected drawer)."""
+    project_root = tmp_path / "proj"
+    project = Project.create(project_root, name="t")
+
+    a = project.kept_dir / "vid__s000_t000_f000000.png"
+    Image.new("RGB", (16, 16), (10, 10, 10)).save(a)
+
+    log = MetadataLog(project.metadata_path)
+    log.append(FrameRecord(
+        filename=a.stem, kept=True, scene_idx=0, tracklet_id=0,
+        frame_idx=0, timestamp_seconds=0.0, bbox=(0, 0, 16, 16),
+        ccip_distance=0.0, sharpness=1.0, visibility=1.0, aspect=1.0,
+        score=0.9, video_stem="vid", character_slug="kiyotaka",
+    ))
+
+    from neme_anima.dedup import _append_dedup_metadata
+    _append_dedup_metadata(project, "vid", [a], drop_indices={0})
+
+    rows = list(MetadataLog(project.metadata_path).iter_records(video_stem="vid"))
+    last = rows[-1]
+    assert last.kept is False
+    assert last.character_slug == "kiyotaka"
 
 
 def test_create_project_helper(tmp_path: Path):

@@ -18,6 +18,7 @@ character.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -69,21 +70,36 @@ def _scores_by_filename(project: Project, video_stem: str) -> dict[str, float]:
 
 
 def find_duplicate_groups(
-    pairwise_distances: np.ndarray, threshold: float
+    pairwise_distances: np.ndarray,
+    threshold: float,
+    *,
+    frame_indices: list[int] | None = None,
+    lookback_frames: int = 0,
 ) -> list[list[int]]:
     """Return connected components in the threshold graph.
 
-    Edge between i and j if ``distances[i,j] < threshold``. Each returned
-    group is the list of indices in one component (singletons included). The
-    threshold is strict-less-than so an exact identical pair (distance 0)
-    always merges; equal-to-threshold does not, which makes 0.0 a safe sentinel.
+    Edge between i and j if ``distances[i,j] < threshold`` AND (when
+    ``lookback_frames > 0``) ``|frame_indices[i] - frame_indices[j]|
+    <= lookback_frames``. The frame-window restriction is what makes
+    dedup *local*: visually similar but temporally distant shots stay
+    distinct. ``lookback_frames=0`` disables the restriction (legacy
+    behaviour, useful for very short clips or tests).
 
-    Pure function — no I/O — so the caller can unit-test it without loading
-    CCIP.
+    Each returned group is the list of indices in one component
+    (singletons included). The distance threshold is strict-less-than
+    so an exact identical pair (distance 0) always merges; equal-to-
+    threshold does not, which makes 0.0 a safe sentinel.
+
+    Pure function — no I/O — so the caller can unit-test it without
+    loading CCIP.
     """
     n = pairwise_distances.shape[0]
     if n == 0:
         return []
+    if lookback_frames > 0 and frame_indices is None:
+        raise ValueError(
+            "lookback_frames > 0 requires frame_indices to be provided"
+        )
     parent = list(range(n))
 
     def find(x: int) -> int:
@@ -100,6 +116,10 @@ def find_duplicate_groups(
     # Upper triangle only — distance matrix is symmetric.
     iu, ju = np.triu_indices(n, k=1)
     edges = pairwise_distances[iu, ju] < threshold
+    if lookback_frames > 0:
+        fi = np.asarray(frame_indices)
+        within_window = np.abs(fi[iu] - fi[ju]) <= lookback_frames
+        edges = edges & within_window
     for i, j, e in zip(iu.tolist(), ju.tolist(), edges.tolist(), strict=True):
         if e:
             union(i, j)
@@ -108,6 +128,23 @@ def find_duplicate_groups(
     for idx in range(n):
         by_root.setdefault(find(idx), []).append(idx)
     return list(by_root.values())
+
+
+_FRAME_IDX_RE = re.compile(r"_f(\d+)(?:_crop)?$")
+
+
+def _frame_idx_for_stem(stem: str) -> int:
+    """Extract the frame_idx token from an output filename.
+
+    The pipeline-written stems are ``<video_stem>__s<scene>_t<tracklet>_f<frame>``
+    (with an optional ``_crop`` suffix on derivatives). When the suffix is
+    missing — anomalous file or future schema drift — fall back to 0 so the
+    caller can still process the file; with lookback_frames active that
+    just means it only dedups against frames also at frame_idx 0, which
+    is effectively isolated.
+    """
+    m = _FRAME_IDX_RE.search(stem)
+    return int(m.group(1)) if m else 0
 
 
 def select_keepers(
@@ -171,19 +208,26 @@ def dedup_kept_for_video(
     cfg: DedupConfig,
     progress: PipelineProgress | None = None,
 ) -> DedupReport:
-    """Embed kept crops, group near-duplicates, demote the losers.
+    """Embed kept crops, group locally near-duplicates, demote the losers.
 
-    Always runs (no opt-in toggle). The distance threshold is the only
-    knob — there's no useful workflow where keeping near-pixel-identical
-    duplicates is desirable, and matches still go to ``rejected/`` rather
-    than being deleted (unless ``cfg.move_to_rejected`` is False) so the
+    Always runs. ``cfg.lookback_frames`` restricts duplicate-eligibility
+    to crops whose ``frame_idx`` differs by at most that many frames;
+    visually similar shots far apart in time stay distinct. Matches go
+    to ``rejected/`` (unless ``cfg.move_to_rejected`` is False) so the
     user can recover them. If CCIP isn't installed (CPU-only dev box),
     the lazy import inside the function keeps the rest of the pipeline
     importable.
     """
     progress = progress or NULL_PROGRESS
 
-    pngs = _kept_pngs_for_video(project, video_stem)
+    # Sort by frame_idx so the windowed group-finder's distance pairs
+    # are always between temporally-ordered indices. The on-disk order
+    # from iterdir() is filesystem-dependent and would make the window
+    # behaviour non-deterministic.
+    pngs = sorted(
+        _kept_pngs_for_video(project, video_stem),
+        key=lambda p: _frame_idx_for_stem(p.stem),
+    )
     if not pngs:
         progress.stage_start("dedup", "Dedup", message="no kept frames")
         progress.stage_done("dedup", message="0 kept frames")
@@ -209,8 +253,14 @@ def dedup_kept_for_video(
 
     score_map = _scores_by_filename(project, video_stem)
     scores = [score_map.get(p.stem, 0.0) for p in pngs]
+    frame_indices = [_frame_idx_for_stem(p.stem) for p in pngs]
 
-    groups = find_duplicate_groups(distances, threshold=cfg.distance_threshold)
+    groups = find_duplicate_groups(
+        distances,
+        threshold=cfg.distance_threshold,
+        frame_indices=frame_indices,
+        lookback_frames=cfg.lookback_frames,
+    )
     multi_groups = [g for g in groups if len(g) > 1]
     _, drop_indices = select_keepers(groups, scores)
 
@@ -272,4 +322,11 @@ def _append_dedup_metadata(
             bbox=prev.bbox, ccip_distance=prev.ccip_distance,
             sharpness=prev.sharpness, visibility=prev.visibility,
             aspect=prev.aspect, score=prev.score, video_stem=prev.video_stem,
+            # Carry the owning character through the demotion. Dropping
+            # it (the dataclass default of "default") silently relabelled
+            # every dedup-rejected frame as belonging to the project's
+            # default character even when another character had owned
+            # the kept row, so per-character listings of rejected frames
+            # mis-attributed dedup losses.
+            character_slug=prev.character_slug,
         ))
