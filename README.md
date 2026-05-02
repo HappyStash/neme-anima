@@ -2,9 +2,9 @@
 
 A three-step character LoRA builder:
 
-1. Extract crops of a target character from a video using reference images.
+1. Extract crops of one or more characters from a video using reference images.
 2. Auto-tag each crop with WD14 danbooru tags and natural-language captions, then reorganize the dataset from the UI.
-3. Train a LoRA on Anima with the parameters already wired in.
+3. Train a LoRA per character on Anima with the parameters already wired in.
 
 The extractor and tagger are model-agnostic and produce output sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL). The trainer targets Anima.
 
@@ -17,10 +17,11 @@ For each video:
 1. PySceneDetect splits it into shots.
 2. DeepGHS YOLO (via `imgutils`) detects characters per frame.
 3. ByteTrack links detections into per-shot tracklets.
-4. CCIP matches tracklets to your reference images.
+4. CCIP matches tracklets to each character's reference images and assigns tracklets to whichever character scores best (or rejects them if no character matches).
 5. 1–3 frames per kept tracklet are picked by sharpness, visibility, and aspect ratio.
 6. Each pick is cropped at longest-side 1024 with the original background.
-7. WD14 EVA02-Large v3 writes a kohya-style `.txt` next to each `.png`.
+7. CCIP runs over the kept crops a second time to drop near-duplicates inside a sliding window.
+8. WD14 EVA02-Large v3 writes a kohya-style `.txt` next to each `.png`.
 
 Detections and tracklets are cached so threshold re-runs skip the slow stages.
 
@@ -111,7 +112,7 @@ Binds to `127.0.0.1:<random-port>` and opens the SPA. Tabs: Sources, Frames, Tra
 
 ### Sources
 
-Add MKV/MP4 videos and reference images, opt out of refs per video, run extraction.
+Add MKV/MP4 videos and reference images.
 
 ![Sources tab](docs/neme-anima_extract.png)
 
@@ -122,6 +123,7 @@ Add MKV/MP4 videos and reference images, opt out of refs per video, run extracti
 - Search across the dataset by tag.
 - Bulk-edit tags with regex replace, with live preview.
 - Re-crop any image.
+- Filter by character with the chips at the top of the tab. Move a frame to a different character or also-assign it to a second character.
 
 Selection: shift-click ranges, ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Hover a thumbnail for the tag overlay.
 
@@ -129,7 +131,12 @@ Selection: shift-click ranges, ctrl-click multi-toggle, `A` select all, `D` / `E
 
 ### Training
 
-LoRA training with stop/resume and checkpoint retention. Targets Anima.
+LoRA training with stop/resume and checkpoint retention. Targets Anima. One LoRA per character, queued sequentially.
+
+Two per-character knobs sit alongside the standard rank/alpha/lr settings:
+
+- Core-tag pruning. Compute the tags that show up in more than X% of a character's frames (default 35%) and drop them from the captions at staging time. Turns "long hair, blue eyes, school uniform, smile, ..." into just "smile, ..." for a character whose hair, eyes, and outfit are constants. The LoRA learns those from the visuals; the caption only adds noise. Off by default; opt in once you've reviewed the suggested list.
+- Repeat multiplier. Over- or under-sample a character's frames in the dataset. `0.0` is auto, computed from relative frame counts so a 50-frame character isn't drowned by a 500-frame one. A positive value pins it manually.
 
 ![Training tab](docs/neme-anima_train.png)
 
