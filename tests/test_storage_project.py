@@ -59,7 +59,8 @@ def test_add_source_appends_with_timestamp(tmp_path: Path):
     p.add_source(fake_vid)
     assert len(p.sources) == 1
     assert Path(p.sources[0].path) == fake_vid.resolve()
-    assert p.sources[0].excluded_refs == []
+    # excluded_refs is per-character; an empty dict means no opt-outs anywhere.
+    assert p.sources[0].excluded_refs == {}
     assert p.sources[0].added_at  # set
 
 
@@ -114,10 +115,12 @@ def test_remove_ref_strips_from_excluded_lists_and_deletes_file(tmp_path: Path):
     r2 = p.add_ref(img2)
     p.add_source(vid)
     p.set_excluded_refs(0, [r2.path])
-    assert p.sources[0].excluded_refs == [r2.path]
+    assert p.sources[0].excluded_refs == {"default": [r2.path]}
     p.remove_ref(r2.path)
     assert len(p.refs) == 1
-    assert p.sources[0].excluded_refs == []
+    # remove_ref strips the now-empty list from the dict so empty entries
+    # don't accumulate across saves.
+    assert p.sources[0].excluded_refs == {}
     # File on disk is gone too.
     assert not Path(r2.path).exists()
     # The other ref is untouched.
@@ -133,7 +136,7 @@ def test_set_excluded_refs_persists(tmp_path: Path):
     p.set_excluded_refs(0, [r.path])
     p.save()
     reloaded = Project.load(p.root)
-    assert reloaded.sources[0].excluded_refs == [r.path]
+    assert reloaded.sources[0].excluded_refs == {"default": [r.path]}
 
 
 def test_effective_refs_excludes_per_video_opt_outs(tmp_path: Path):

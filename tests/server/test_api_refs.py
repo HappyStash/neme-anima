@@ -120,6 +120,8 @@ async def test_remove_ref_strips_from_excluded(client, project: Project, tmp_pat
     assert resp.status_code == 204
     reloaded = Project.load(project.root)
     assert len(reloaded.refs) == 1
-    assert reloaded.sources[0].excluded_refs == [b_in_proj]
+    # excluded_refs is the new per-character map; the default character keeps
+    # the lone surviving opt-out, the deleted ref is gone.
+    assert reloaded.sources[0].excluded_refs == {"default": [b_in_proj]}
     assert not Path(a_in_proj).exists()
     assert Path(b_in_proj).exists()

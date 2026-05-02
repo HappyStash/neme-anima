@@ -7,13 +7,23 @@ Layout under the project root:
     output/
       kept/                  (all kept frames, prefixed with <video_stem>__)
       rejected/
-      metadata.jsonl
+      metadata.jsonl         (each row carries character_slug)
       cache/<video_stem>/    (per-video detection cache, parquet)
+
+Multi-character data model:
+    A project owns a list of ``Character`` records. Each character carries
+    its own reference images and training config. A single-character project
+    (the historical shape) auto-migrates to one ``"default"`` character.
+    Files on disk stay flat under ``kept/`` — the per-frame metadata row
+    carries ``character_slug`` so per-character grouping happens at read time
+    (e.g. training dataset assembly) rather than at write time. This keeps
+    the existing ``project.kept_dir / filename.png`` lookups intact.
 """
 
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import asdict, dataclass, field, fields
 from datetime import datetime, timezone
 from pathlib import Path
@@ -50,12 +60,32 @@ def list_videos(folder: Path) -> list[Path]:
     )
 
 
+DEFAULT_CHARACTER_SLUG = "default"
+
+
+def _slugify_character_name(name: str) -> str:
+    """Lower-case, ASCII-safe slug for use as a directory/dict key.
+
+    Mirrors the project-slug convention: only alphanumerics + hyphens, with
+    runs of unsafe characters collapsed to a single hyphen. Empty input maps
+    to ``"character"`` so callers always get a non-empty slug.
+    """
+    s = re.sub(r"[^a-zA-Z0-9]+", "-", (name or "")).strip("-").lower()
+    return s or "character"
+
+
 @dataclass
 class Source:
-    """An input video tracked by the project."""
+    """An input video tracked by the project.
+
+    ``excluded_refs`` is a per-character map: ``{character_slug: [ref_path, ...]}``
+    listing the refs to skip for *that* character on this source. Old projects
+    persisted a flat list (no character context) — auto-migrated on load to
+    ``{"default": [...]}``.
+    """
     path: str                         # absolute path to the video file
     added_at: str                     # ISO-8601 UTC
-    excluded_refs: list[str] = field(default_factory=list)
+    excluded_refs: dict[str, list[str]] = field(default_factory=dict)
     extraction_runs: list[dict] = field(default_factory=list)
 
 
@@ -198,13 +228,33 @@ class TrainingConfig:
 
 
 @dataclass
+class Character:
+    """One trainable character within a project.
+
+    Each character carries its own references and training config. The slug
+    is the primary key within the project (used in metadata rows and as the
+    directory key for staged training datasets). The trigger token is what
+    the user puts in their LoRA prompt to invoke this character; if empty
+    the trainer falls back to the slug.
+    """
+    slug: str
+    name: str
+    refs: list[RefImage] = field(default_factory=list)
+    trigger_token: str = ""
+    training: TrainingConfig = field(default_factory=TrainingConfig)
+
+
+@dataclass
 class Project:
     name: str
     slug: str
     root: Path
     created_at: datetime
     sources: list[Source] = field(default_factory=list)
-    refs: list[RefImage] = field(default_factory=list)
+    # Characters in display order. Always non-empty after ``Project.load`` —
+    # legacy single-character projects auto-migrate into one default character
+    # whose slug is :data:`DEFAULT_CHARACTER_SLUG`.
+    characters: list[Character] = field(default_factory=list)
     thresholds_overrides: dict = field(default_factory=dict)
     source_root: str | None = None
     # When True, extract/rerun pipelines pause after writing kept frames to
@@ -213,7 +263,6 @@ class Project:
     # cost on them. False = tag inline like the original pipeline.
     pause_before_tag: bool = True
     llm: LLMConfig = field(default_factory=LLMConfig)
-    training: TrainingConfig = field(default_factory=TrainingConfig)
 
     # ---------------- factory methods ----------------
 
@@ -229,6 +278,7 @@ class Project:
             slug=slug,
             root=root,
             created_at=now,
+            characters=[Character(slug=DEFAULT_CHARACTER_SLUG, name=name)],
         )
         # Folder skeleton.
         (root / "refs" / ".thumbnails").mkdir(parents=True)
@@ -244,22 +294,17 @@ class Project:
         with open(root / "project.json") as f:
             data = json.load(f)
         llm_raw = data.get("llm") or {}
-        training_raw = data.get("training") or {}
-        # Build TrainingConfig from disk; tolerate missing keys so older
-        # project.json files keep loading after this field was added.
-        defaults = TrainingConfig()
-        training = TrainingConfig(**{
-            f.name: training_raw[f.name]
-            for f in fields(defaults)
-            if f.name in training_raw
-        })
+
+        characters = cls._load_characters(data)
+        sources = cls._load_sources(data, characters)
+
         return cls(
             name=data["name"],
             slug=data["slug"],
             root=root,
             created_at=datetime.fromisoformat(data["created_at"]),
-            sources=[Source(**s) for s in data.get("sources", [])],
-            refs=[RefImage(**r) for r in data.get("refs", [])],
+            sources=sources,
+            characters=characters,
             thresholds_overrides=data.get("thresholds_overrides", {}),
             source_root=data.get("source_root"),
             pause_before_tag=bool(data.get("pause_before_tag", True)),
@@ -270,8 +315,77 @@ class Project:
                 prompt=str(llm_raw.get("prompt") or ""),
                 api_key=str(llm_raw.get("api_key") or ""),
             ),
-            training=training,
         )
+
+    @staticmethod
+    def _load_characters(data: dict) -> list[Character]:
+        """Build the character list from a parsed project.json.
+
+        Handles three shapes:
+          1. New: ``characters: [{slug, name, refs, trigger_token, training}, ...]``
+          2. Old: top-level ``refs: [...]`` and ``training: {...}`` → synthesized
+             into one ``"default"`` character. The project's display name is
+             used as the character name, since old projects = one character.
+          3. Empty: no refs and no training → still emit one default character
+             so callers can rely on ``project.characters[0]`` existing.
+
+        Tolerates missing keys throughout so older / partial files keep loading.
+        """
+        if "characters" in data and data["characters"]:
+            chars: list[Character] = []
+            for raw in data["characters"]:
+                training_raw = raw.get("training") or {}
+                training = TrainingConfig(**{
+                    f.name: training_raw[f.name]
+                    for f in fields(TrainingConfig())
+                    if f.name in training_raw
+                })
+                chars.append(Character(
+                    slug=str(raw.get("slug") or DEFAULT_CHARACTER_SLUG),
+                    name=str(raw.get("name") or raw.get("slug") or "Character"),
+                    refs=[RefImage(**r) for r in raw.get("refs", [])],
+                    trigger_token=str(raw.get("trigger_token") or ""),
+                    training=training,
+                ))
+            return chars
+        # Legacy single-character migration.
+        old_training = data.get("training") or {}
+        training = TrainingConfig(**{
+            f.name: old_training[f.name]
+            for f in fields(TrainingConfig())
+            if f.name in old_training
+        })
+        return [Character(
+            slug=DEFAULT_CHARACTER_SLUG,
+            name=str(data.get("name") or "default"),
+            refs=[RefImage(**r) for r in data.get("refs", [])],
+            training=training,
+        )]
+
+    @staticmethod
+    def _load_sources(data: dict, characters: list[Character]) -> list[Source]:
+        """Load sources, migrating per-source ``excluded_refs`` shape.
+
+        Old shape was a flat list of ref paths; new shape is a dict keyed by
+        character slug. A flat list is interpreted as "the default character's
+        opt-outs" and lifted into ``{"default": [...]}`` so per-character
+        opt-outs work for every character thereafter.
+        """
+        default_slug = (
+            characters[0].slug if characters else DEFAULT_CHARACTER_SLUG
+        )
+        out: list[Source] = []
+        for s in data.get("sources", []):
+            excluded = s.get("excluded_refs", {})
+            if isinstance(excluded, list):
+                excluded = {default_slug: list(excluded)} if excluded else {}
+            out.append(Source(
+                path=s["path"],
+                added_at=s["added_at"],
+                excluded_refs=dict(excluded),
+                extraction_runs=s.get("extraction_runs", []),
+            ))
+        return out
 
     def save(self) -> None:
         out = {
@@ -279,16 +393,103 @@ class Project:
             "slug": self.slug,
             "created_at": self.created_at.isoformat(),
             "sources": [asdict(s) for s in self.sources],
-            "refs": [asdict(r) for r in self.refs],
+            "characters": [asdict(c) for c in self.characters],
             "thresholds_overrides": self.thresholds_overrides,
             "source_root": self.source_root,
             "pause_before_tag": self.pause_before_tag,
             "llm": asdict(self.llm),
-            "training": asdict(self.training),
         }
         tmp = self.root / "project.json.tmp"
         tmp.write_text(json.dumps(out, indent=2))
         tmp.replace(self.root / "project.json")
+
+    # ---------------- character helpers ----------------
+
+    @property
+    def refs(self) -> list[RefImage]:
+        """Backwards-compat alias: refs of the default (first) character.
+
+        Existing API endpoints and the mono-character UI read this. New
+        character-aware code should index ``project.characters`` directly.
+        """
+        return self.characters[0].refs if self.characters else []
+
+    @refs.setter
+    def refs(self, value: list[RefImage]) -> None:
+        if not self.characters:
+            self.characters = [Character(slug=DEFAULT_CHARACTER_SLUG,
+                                         name=self.name, refs=list(value))]
+        else:
+            self.characters[0].refs = list(value)
+
+    @property
+    def training(self) -> TrainingConfig:
+        """Backwards-compat alias: training config of the default character."""
+        if not self.characters:
+            self.characters = [Character(slug=DEFAULT_CHARACTER_SLUG, name=self.name)]
+        return self.characters[0].training
+
+    @training.setter
+    def training(self, value: TrainingConfig) -> None:
+        if not self.characters:
+            self.characters = [Character(slug=DEFAULT_CHARACTER_SLUG,
+                                         name=self.name, training=value)]
+        else:
+            self.characters[0].training = value
+
+    def character_by_slug(self, slug: str) -> Character | None:
+        for c in self.characters:
+            if c.slug == slug:
+                return c
+        return None
+
+    def add_character(self, *, name: str, slug: str | None = None) -> Character:
+        """Append a new character to this project.
+
+        Slug is derived from ``name`` if not given, then made unique within
+        the project by appending ``-2``, ``-3``, ... so two characters named
+        "Yui" never collide on disk.
+        """
+        base = _slugify_character_name(slug or name)
+        candidate = base
+        n = 2
+        existing = {c.slug for c in self.characters}
+        while candidate in existing:
+            candidate = f"{base}-{n}"
+            n += 1
+        c = Character(slug=candidate, name=name)
+        self.characters.append(c)
+        self.save()
+        return c
+
+    def remove_character(self, slug: str) -> None:
+        """Drop a character from the project.
+
+        Refuses to remove the last remaining character — every project must
+        carry at least one. Cleans up per-source opt-out maps so dangling
+        keys don't accumulate.
+        """
+        if len(self.characters) <= 1:
+            raise ValueError("cannot remove the last character — projects need at least one")
+        self.characters = [c for c in self.characters if c.slug != slug]
+        for s in self.sources:
+            s.excluded_refs.pop(slug, None)
+        self.save()
+
+    def _resolve_character(self, slug: str | None) -> Character:
+        """Return the named character, or the default (first) one when ``slug``
+        is None. Raises ``KeyError`` if a non-None slug doesn't exist — caller
+        bugs (e.g. UI hands us a stale slug) shouldn't be silently rerouted to
+        the default character.
+        """
+        if slug is None:
+            if not self.characters:
+                self.characters = [Character(slug=DEFAULT_CHARACTER_SLUG, name=self.name)]
+            return self.characters[0]
+        c = self.character_by_slug(slug)
+        if c is None:
+            raise KeyError(f"unknown character slug: {slug!r}")
+        return c
 
     # ---------------- mutations ----------------
 
@@ -304,18 +505,28 @@ class Project:
         self.save()
         return s
 
-    def add_ref(self, ref_path: Path) -> RefImage:
-        """Copy an external image into the project's refs/ folder and track it."""
+    def add_ref(self, ref_path: Path, *, character_slug: str | None = None) -> RefImage:
+        """Copy an external image into the project's refs/ folder and track it
+        for the given character (default character when ``character_slug`` is
+        ``None``)."""
         ref_path = Path(ref_path)
         if not ref_path.is_file():
             raise FileNotFoundError(ref_path)
-        return self._ingest_ref(ref_path.name, ref_path.read_bytes())
+        return self._ingest_ref(ref_path.name, ref_path.read_bytes(),
+                                character_slug=character_slug)
 
-    def add_ref_bytes(self, filename: str, data: bytes) -> RefImage:
-        """Save uploaded image bytes into the project's refs/ folder and track it."""
-        return self._ingest_ref(filename, data)
+    def add_ref_bytes(
+        self, filename: str, data: bytes, *, character_slug: str | None = None,
+    ) -> RefImage:
+        """Save uploaded image bytes into the project's refs/ folder and track
+        it for the given character (default character when ``character_slug``
+        is ``None``)."""
+        return self._ingest_ref(filename, data, character_slug=character_slug)
 
-    def _ingest_ref(self, filename: str, data: bytes) -> RefImage:
+    def _ingest_ref(
+        self, filename: str, data: bytes, *, character_slug: str | None = None,
+    ) -> RefImage:
+        character = self._resolve_character(character_slug)
         refs_dir = self.root / "refs"
         refs_dir.mkdir(parents=True, exist_ok=True)
         dest = self._unique_ref_path(filename)
@@ -324,7 +535,7 @@ class Project:
             path=str(dest.resolve()),
             added_at=datetime.now(timezone.utc).isoformat(),
         )
-        self.refs.append(r)
+        character.refs.append(r)
         self.save()
         return r
 
@@ -347,22 +558,40 @@ class Project:
         self.save()
 
     def remove_ref(self, ref_path: str) -> None:
+        """Drop a ref path from every character that owns it.
+
+        We don't require the caller to know which character owned the ref —
+        the path is unique inside the project's refs/ folder, so removing it
+        means it's gone for *all* characters. The on-disk file is then deleted
+        only if no character still references it (defence against future
+        sharing semantics) and only if the file lives under the project's own
+        refs/ folder.
+        """
         ref_path = str(Path(ref_path).resolve())
-        kept: list[RefImage] = []
-        deleted: list[Path] = []
-        for r in self.refs:
-            if r.path == ref_path:
-                deleted.append(Path(r.path))
-            else:
-                kept.append(r)
-        self.refs = kept
-        # Also strip from any source's excluded_refs so dangling references don't accumulate.
+        deleted_paths: set[str] = set()
+        for c in self.characters:
+            new_refs: list[RefImage] = []
+            for r in c.refs:
+                if r.path == ref_path:
+                    deleted_paths.add(r.path)
+                else:
+                    new_refs.append(r)
+            c.refs = new_refs
+        # Strip dangling opt-outs across every (source, character) pair.
         for s in self.sources:
-            s.excluded_refs = [p for p in s.excluded_refs if p != ref_path]
+            for slug, paths in list(s.excluded_refs.items()):
+                s.excluded_refs[slug] = [p for p in paths if p != ref_path]
+                if not s.excluded_refs[slug]:
+                    del s.excluded_refs[slug]
         self.save()
-        # Delete the on-disk file only if it's inside our refs/ folder — never touch
-        # external files that may be referenced by older project formats.
-        for d in deleted:
+        # Delete the on-disk file only if it's gone from every character now,
+        # and only if it lives under our refs/ folder.
+        still_referenced = any(
+            r.path == ref_path for c in self.characters for r in c.refs
+        )
+        if still_referenced:
+            return
+        for d in {Path(p) for p in deleted_paths}:
             try:
                 if d.is_file() and refs_dir_contains(self.root, d):
                     d.unlink()
@@ -392,17 +621,38 @@ class Project:
             self.save()
         return added, skipped
 
-    def set_excluded_refs(self, source_idx: int, excluded: list[str]) -> None:
-        excluded = [str(Path(p).resolve()) for p in excluded]
-        self.sources[source_idx].excluded_refs = excluded
+    def set_excluded_refs(
+        self, source_idx: int, excluded: list[str], *, character_slug: str | None = None,
+    ) -> None:
+        """Replace the opt-out list for ``(source, character)`` with ``excluded``.
+
+        ``character_slug=None`` updates the default (first) character. An empty
+        list clears the entry so the underlying dict doesn't accumulate empty
+        lists across saves.
+        """
+        character = self._resolve_character(character_slug)
+        normalized = [str(Path(p).resolve()) for p in excluded]
+        src = self.sources[source_idx]
+        if normalized:
+            src.excluded_refs[character.slug] = normalized
+        else:
+            src.excluded_refs.pop(character.slug, None)
         self.save()
 
     # ---------------- ref-set + path helpers ----------------
 
-    def effective_refs_for(self, source_idx: int) -> list[str]:
-        """All project ref paths minus the per-video opt-outs."""
-        excluded = set(self.sources[source_idx].excluded_refs)
-        return [r.path for r in self.refs if r.path not in excluded]
+    def effective_refs_for(
+        self, source_idx: int, *, character_slug: str | None = None,
+    ) -> list[str]:
+        """Ref paths for ``(source, character)`` minus per-video opt-outs.
+
+        ``character_slug=None`` returns the default character's effective set,
+        which is what every existing call site wants while the UI is still
+        single-character.
+        """
+        character = self._resolve_character(character_slug)
+        excluded = set(self.sources[source_idx].excluded_refs.get(character.slug, []))
+        return [r.path for r in character.refs if r.path not in excluded]
 
     def video_stem(self, source_idx: int) -> str:
         return Path(self.sources[source_idx].path).stem

@@ -74,7 +74,9 @@ async def test_patch_excluded_refs(client, project: Project, tmp_path: Path):
     )
     assert resp.status_code == 200
     reloaded = Project.load(project.root)
-    assert reloaded.sources[0].excluded_refs == [str(img.resolve())]
+    # excluded_refs is now a per-character map; this PATCH (no character_slug)
+    # targets the default character.
+    assert reloaded.sources[0].excluded_refs == {"default": [str(img.resolve())]}
 
 
 async def test_add_source_accepts_file_uri(client, project: Project, tmp_path: Path):

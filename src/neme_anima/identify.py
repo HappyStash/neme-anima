@@ -161,3 +161,87 @@ class Identifier:
         if distance <= self.cfg.body_max_distance_loose:
             return Verdict.KEEP_MEDIUM
         return Verdict.REJECT
+
+
+@dataclass(frozen=True)
+class RoutedTrackletScore:
+    """Per-tracklet routing decision in a multi-character extraction.
+
+    ``character_slug`` is the winning character's slug (lowest median CCIP
+    distance) or ``None`` when no character met the loose threshold. ``score``
+    is the winning character's :class:`TrackletScore`. ``per_character`` keeps
+    the full table around for diagnostics — the WS broadcaster surfaces it so
+    the user can see why a tracklet went to A instead of B.
+    """
+    character_slug: str | None
+    score: TrackletScore
+    per_character: dict[str, TrackletScore]
+
+
+class MultiCharacterRouter:
+    """Identifies a tracklet against every character's references and routes
+    it to the best-matching one (or rejects it).
+
+    Composition of N :class:`Identifier` instances rather than a redesign of
+    the single-character one — the per-character contract is unchanged, and
+    a project with one character produces output identical (modulo the
+    routing wrapper) to the pre-multi-character pipeline.
+
+    Empty character lists in the input map are silently skipped — a project
+    can carry a character with zero refs (e.g. a placeholder added before
+    the user uploads ref images), and that character simply doesn't compete
+    in the routing.
+    """
+
+    def __init__(
+        self,
+        *,
+        refs_by_slug: dict[str, list[Path]],
+        cfg: IdentifyConfig,
+    ) -> None:
+        self.cfg = cfg
+        self._identifiers: dict[str, Identifier] = {}
+        for slug, paths in refs_by_slug.items():
+            if not paths:
+                continue
+            self._identifiers[slug] = Identifier(ref_paths=paths, cfg=cfg)
+
+    @property
+    def slugs(self) -> tuple[str, ...]:
+        return tuple(self._identifiers.keys())
+
+    def reference_features(self, slug: str) -> list[np.ndarray]:
+        return self._identifiers[slug].reference_features()
+
+    def route_tracklet(self, tracklet: Tracklet, video: Video) -> RoutedTrackletScore:
+        """Score the tracklet against every character; return the winner.
+
+        Lowest median distance wins. If the winner's verdict is REJECT (no
+        character met the loose threshold), ``character_slug`` is ``None``
+        and the caller should treat the tracklet as rejected.
+        """
+        if not self._identifiers:
+            # No character has refs — synthesize a reject so the caller
+            # doesn't need a separate "no characters configured" branch.
+            empty_score = TrackletScore(
+                scene_idx=tracklet.scene_idx, tracklet_id=tracklet.tracklet_id,
+                median_distance=float("inf"), per_sample_distances=(),
+                sampled_frame_idxs=(), verdict=Verdict.REJECT,
+            )
+            return RoutedTrackletScore(
+                character_slug=None, score=empty_score, per_character={},
+            )
+
+        scores: dict[str, TrackletScore] = {
+            slug: ident.score_tracklet(tracklet, video)
+            for slug, ident in self._identifiers.items()
+        }
+        winner_slug = min(scores, key=lambda s: scores[s].median_distance)
+        winner_score = scores[winner_slug]
+        if winner_score.verdict == Verdict.REJECT:
+            return RoutedTrackletScore(
+                character_slug=None, score=winner_score, per_character=scores,
+            )
+        return RoutedTrackletScore(
+            character_slug=winner_slug, score=winner_score, per_character=scores,
+        )

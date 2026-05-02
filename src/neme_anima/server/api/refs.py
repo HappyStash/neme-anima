@@ -35,9 +35,30 @@ def _load(request: Request, slug: str) -> Project:
         )
 
 
+def _resolve_character_slug(project: Project, raw: str | None) -> str | None:
+    """Validate ``raw`` against the project's characters.
+
+    ``None`` (the default when the query string is omitted) means "use the
+    default character" and is passed through unchanged. An unknown slug is
+    a 404 — callers should know what character they're targeting; silent
+    fallback to the default would mask UI bugs.
+    """
+    if raw is None or raw == "":
+        return None
+    if project.character_by_slug(raw) is None:
+        raise HTTPException(status_code=404, detail=f"unknown character: {raw}")
+    return raw
+
+
 @router.post("/{slug}/refs")
-async def add_refs(request: Request, slug: str, body: AddRefsBody) -> dict:
+async def add_refs(
+    request: Request,
+    slug: str,
+    body: AddRefsBody,
+    character_slug: str | None = None,
+) -> dict:
     project = _load(request, slug)
+    cslug = _resolve_character_slug(project, character_slug)
     added: list[str] = []
     skipped: list[str] = []
     for p in body.paths:
@@ -47,7 +68,7 @@ async def add_refs(request: Request, slug: str, body: AddRefsBody) -> dict:
             skipped.append(p)
             continue
         try:
-            r = project.add_ref(normalized)
+            r = project.add_ref(normalized, character_slug=cslug)
             added.append(r.path)
         except ValueError:
             skipped.append(str(normalized.resolve()))
@@ -56,10 +77,14 @@ async def add_refs(request: Request, slug: str, body: AddRefsBody) -> dict:
 
 @router.post("/{slug}/refs/upload")
 async def upload_refs(
-    request: Request, slug: str, files: list[UploadFile]
+    request: Request,
+    slug: str,
+    files: list[UploadFile],
+    character_slug: str | None = None,
 ) -> dict:
     """Accept multipart-uploaded image bytes and store them in the project."""
     project = _load(request, slug)
+    cslug = _resolve_character_slug(project, character_slug)
     added: list[str] = []
     skipped: list[str] = []
     for f in files:
@@ -68,7 +93,9 @@ async def upload_refs(
             if not data:
                 skipped.append(f.filename or "<empty>")
                 continue
-            r = project.add_ref_bytes(f.filename or "ref", data)
+            r = project.add_ref_bytes(
+                f.filename or "ref", data, character_slug=cslug,
+            )
             added.append(r.path)
         finally:
             await f.close()

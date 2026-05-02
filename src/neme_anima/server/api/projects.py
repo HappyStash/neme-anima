@@ -59,7 +59,21 @@ def _project_view(project: Project) -> dict:
         "folder": str(project.root.resolve()),
         "created_at": project.created_at.isoformat(),
         "sources": sources,
+        # Backwards-compat top-level alias for the default character's refs.
+        # The mono-character UI reads this; new character-aware clients should
+        # prefer ``characters[*].refs``.
         "refs": [asdict(r) for r in project.refs],
+        # Full multi-character listing — exposed so future UI can switch to
+        # rendering per-character ref strips without a separate endpoint.
+        "characters": [
+            {
+                "slug": c.slug, "name": c.name,
+                "trigger_token": c.trigger_token,
+                "refs": [asdict(r) for r in c.refs],
+                "ref_count": len(c.refs),
+            }
+            for c in project.characters
+        ],
         "thresholds_overrides": project.thresholds_overrides,
         "source_root": project.source_root,
         "pause_before_tag": project.pause_before_tag,

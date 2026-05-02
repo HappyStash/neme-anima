@@ -112,13 +112,21 @@ async def remove_source(request: Request, slug: str, idx: int) -> Response:
 
 @router.patch("/{slug}/sources/{idx}")
 async def patch_source(
-    request: Request, slug: str, idx: int, body: PatchSourceBody
+    request: Request,
+    slug: str,
+    idx: int,
+    body: PatchSourceBody,
+    character_slug: str | None = None,
 ) -> dict:
     project = _load(request, slug)
     if idx < 0 or idx >= len(project.sources):
         raise HTTPException(status_code=404, detail="source index out of range")
+    if character_slug not in (None, "") and project.character_by_slug(character_slug) is None:
+        raise HTTPException(status_code=404, detail=f"unknown character: {character_slug}")
     if body.excluded_refs is not None:
-        project.set_excluded_refs(idx, body.excluded_refs)
+        project.set_excluded_refs(
+            idx, body.excluded_refs, character_slug=character_slug or None,
+        )
     return {"excluded_refs": project.sources[idx].excluded_refs}
 
 

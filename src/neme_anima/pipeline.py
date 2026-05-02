@@ -18,7 +18,7 @@ from neme_anima.crop import crop_frame
 from neme_anima.dedup import dedup_kept_for_video
 from neme_anima.detect import Detector, FrameDetections
 from neme_anima.frame_select import select_frames
-from neme_anima.identify import Identifier, Verdict
+from neme_anima.identify import MultiCharacterRouter
 from neme_anima.output import OutputWriter
 from neme_anima.pipeline_progress import NULL_PROGRESS, PipelineProgress
 from neme_anima.storage.metadata import FrameRecord
@@ -73,18 +73,33 @@ def _run_extract_inner(
     source = project.sources[source_idx]
     video_path = Path(source.path)
     video_stem = project.video_stem(source_idx)
-    eff_refs = project.effective_refs_for(source_idx)
-    if not eff_refs:
-        raise ValueError(f"source has no effective references (all opted out): {video_path.name}")
+    refs_by_slug = _refs_by_character(project, source_idx)
+    if not any(refs_by_slug.values()):
+        raise ValueError(
+            f"no character has effective references for {video_path.name}: "
+            "every character is either empty or fully opted-out"
+        )
 
     writer = OutputWriter(project=project, video_stem=video_stem)
     console.rule(f"[bold]neme-anima[/bold] :: {video_path.name}")
-    console.print(f"refs: {len(eff_refs)} effective ({len(project.refs)} project total)")
+    total_refs = sum(len(v) for v in refs_by_slug.values())
+    active_chars = sum(1 for v in refs_by_slug.values() if v)
+    console.print(
+        f"refs: {total_refs} effective across {active_chars} "
+        f"character{'s' if active_chars != 1 else ''}"
+    )
 
     vid = Video(video_path)
     console.print(f"video: {vid.num_frames} frames @ {vid.fps:.2f} fps "
                   f"({vid.duration_seconds:.1f} s)")
-    progress.stage_done("setup", message=f"{vid.num_frames:,} frames @ {vid.fps:.1f} fps · {len(eff_refs)} ref{'s' if len(eff_refs)!=1 else ''}")
+    progress.stage_done(
+        "setup",
+        message=(
+            f"{vid.num_frames:,} frames @ {vid.fps:.1f} fps · "
+            f"{total_refs} ref{'s' if total_refs != 1 else ''} "
+            f"× {active_chars} char{'s' if active_chars != 1 else ''}"
+        ),
+    )
 
     progress.stage_start("scenes", "Scene detection", message="Analysing shots")
     scenes = detect_scenes(
@@ -96,7 +111,7 @@ def _run_extract_inner(
     writer.write_scenes(scenes)
     progress.stage_done("scenes", message=f"{len(scenes)} scene{'s' if len(scenes)!=1 else ''}")
 
-    identifier = Identifier(ref_paths=[Path(p) for p in eff_refs], cfg=thresholds.identify)
+    router = MultiCharacterRouter(refs_by_slug=refs_by_slug, cfg=thresholds.identify)
     detector = Detector(
         person_score_min=thresholds.detect.person_score_min,
         face_score_min=thresholds.detect.face_score_min,
@@ -141,8 +156,6 @@ def _run_extract_inner(
     writer.write_tracklets(tracklets)
     progress.stage_done("track", message=f"{len(tracklets)} tracklet{'s' if len(tracklets)!=1 else ''}")
 
-    ref_features = identifier.reference_features()
-
     progress.stage_start(
         "identify", "Identify · select · save",
         total=len(tracklets),
@@ -152,10 +165,12 @@ def _run_extract_inner(
         task = p.add_task("identify+save", total=len(tracklets))
         kept, rejected = 0, 0
         for tracklet in tracklets:
-            score = identifier.score_tracklet(tracklet, vid)
-            if score.verdict == Verdict.REJECT:
-                _save_one_rejected_sample(writer, vid, tracklet, score.median_distance,
-                                          thresholds, video_stem)
+            routed = router.route_tracklet(tracklet, vid)
+            if routed.character_slug is None:
+                _save_one_rejected_sample(
+                    writer, vid, tracklet, routed.score.median_distance,
+                    thresholds, video_stem,
+                )
                 rejected += 1
                 p.advance(task)
                 progress.stage_advance("identify")
@@ -164,6 +179,7 @@ def _run_extract_inner(
                     f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
                 )
                 continue
+            ref_features = router.reference_features(routed.character_slug)
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
                 frame = vid.get(pick.frame_idx)
@@ -181,6 +197,7 @@ def _run_extract_inner(
                     ccip_distance=pick.ccip_distance,
                     sharpness=pick.sharpness, visibility=pick.visibility, aspect=pick.aspect,
                     score=pick.score, video_stem=video_stem,
+                    character_slug=routed.character_slug,
                 )
                 # Defer tagging — write the image with an empty .txt so the
                 # user can review/delete kept frames before paying the
@@ -305,6 +322,14 @@ def _save_one_rejected_sample(
     writer: OutputWriter, vid: Video, tracklet: Tracklet,
     distance: float, thresholds: Thresholds, video_stem: str,
 ) -> None:
+    """Write a midpoint sample of a rejected tracklet to ``rejected/``.
+
+    Rejected frames belong to no character — they're surfaced to the user
+    purely so they can audit "why was this rejected?". We tag them with
+    the default character slug so per-character listings still see them
+    when filtering by the default character (which is where the only
+    surviving filter, in mono-character projects, lives).
+    """
     mid = tracklet.items[len(tracklet.items) // 2]
     bbox = (mid.detection.x1, mid.detection.y1, mid.detection.x2, mid.detection.y2)
     frame = vid.get(mid.frame_idx)
@@ -323,6 +348,22 @@ def _save_one_rejected_sample(
         video_stem=video_stem,
     )
     writer.write_rejected(rec, cropped.image_rgb)
+
+
+def _refs_by_character(project: Project, source_idx: int) -> dict[str, list[Path]]:
+    """Build the ``{character_slug: [ref Path, ...]}`` map the router needs.
+
+    Each character's per-source opt-outs are honoured. Characters with zero
+    refs (after opt-outs) are still present in the returned map with an
+    empty list — the router skips empty lists internally, but keeping them
+    makes the diagnostic table in :class:`RoutedTrackletScore.per_character`
+    easier to render in the UI.
+    """
+    out: dict[str, list[Path]] = {}
+    for c in project.characters:
+        eff = project.effective_refs_for(source_idx, character_slug=c.slug)
+        out[c.slug] = [Path(p) for p in eff]
+    return out
 
 
 def _wipe_outputs_for_stem(project: Project, video_stem: str) -> None:
@@ -364,17 +405,19 @@ def _run_rerun_inner(
     )
     if source_idx is None:
         raise ValueError(f"no source matches video_stem={video_stem!r}")
-    eff_refs = project.effective_refs_for(source_idx)
-    if not eff_refs:
-        raise ValueError("source has no effective references (all opted out)")
+    refs_by_slug = _refs_by_character(project, source_idx)
+    if not any(refs_by_slug.values()):
+        raise ValueError(
+            "no character has effective references — every character is "
+            "either empty or fully opted-out for this source"
+        )
 
     writer = OutputWriter(project=project, video_stem=video_stem)
     tracklets = writer.read_tracklets()
     console.print(f"cached tracklets: {len(tracklets)}")
 
     vid = Video(Path(project.sources[source_idx].path))
-    identifier = Identifier(ref_paths=[Path(p) for p in eff_refs], cfg=thresholds.identify)
-    ref_features = identifier.reference_features()
+    router = MultiCharacterRouter(refs_by_slug=refs_by_slug, cfg=thresholds.identify)
 
     _wipe_outputs_for_stem(project, video_stem)
     progress.stage_done(
@@ -391,10 +434,12 @@ def _run_rerun_inner(
         task = p.add_task("rerun", total=len(tracklets))
         kept, rejected = 0, 0
         for tracklet in tracklets:
-            score = identifier.score_tracklet(tracklet, vid)
-            if score.verdict == Verdict.REJECT:
-                _save_one_rejected_sample(writer, vid, tracklet, score.median_distance,
-                                          thresholds, video_stem)
+            routed = router.route_tracklet(tracklet, vid)
+            if routed.character_slug is None:
+                _save_one_rejected_sample(
+                    writer, vid, tracklet, routed.score.median_distance,
+                    thresholds, video_stem,
+                )
                 rejected += 1
                 p.advance(task)
                 progress.stage_advance("identify")
@@ -403,6 +448,7 @@ def _run_rerun_inner(
                     f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
                 )
                 continue
+            ref_features = router.reference_features(routed.character_slug)
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
                 frame = vid.get(pick.frame_idx)
@@ -420,6 +466,7 @@ def _run_rerun_inner(
                     ccip_distance=pick.ccip_distance,
                     sharpness=pick.sharpness, visibility=pick.visibility, aspect=pick.aspect,
                     score=pick.score, video_stem=video_stem,
+                    character_slug=routed.character_slug,
                 )
                 writer.write_kept_image(rec, cropped.image_rgb)
                 kept += 1

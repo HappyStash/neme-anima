@@ -13,9 +13,19 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 
 
+DEFAULT_CHARACTER_SLUG = "default"
+
+
 @dataclass
 class FrameRecord:
-    """One row in metadata.jsonl, for traceability of every kept / rejected image."""
+    """One row in metadata.jsonl, for traceability of every kept / rejected image.
+
+    ``character_slug`` identifies which character this frame was routed to
+    during identification (single-character extractions all use
+    ``"default"``). Frames produced before the multi-character migration
+    have no slug in their JSON row — :meth:`MetadataLog.iter_records`
+    backfills :data:`DEFAULT_CHARACTER_SLUG` so callers always see a slug.
+    """
     filename: str
     kept: bool
     scene_idx: int
@@ -29,6 +39,7 @@ class FrameRecord:
     aspect: float
     score: float
     video_stem: str
+    character_slug: str = DEFAULT_CHARACTER_SLUG
 
 
 class MetadataLog:
@@ -42,7 +53,14 @@ class MetadataLog:
         with open(self.path, "a", encoding="utf-8") as f:
             f.write(json.dumps(asdict(record)) + "\n")
 
-    def iter_records(self, *, video_stem: str | None = None) -> Iterator[FrameRecord]:
+    def iter_records(
+        self, *, video_stem: str | None = None, character_slug: str | None = None,
+    ) -> Iterator[FrameRecord]:
+        """Stream records, optionally filtered by ``video_stem`` and/or
+        ``character_slug``. Older rows that pre-date the multi-character
+        migration are backfilled with ``character_slug='default'`` so a
+        character-aware caller never has to special-case missing keys.
+        """
         if not self.path.exists():
             return
         with open(self.path, encoding="utf-8") as f:
@@ -52,7 +70,11 @@ class MetadataLog:
                     continue
                 d = json.loads(line)
                 d["bbox"] = tuple(d["bbox"])
+                # Back-compat: pre-migration rows omit character_slug.
+                d.setdefault("character_slug", DEFAULT_CHARACTER_SLUG)
                 rec = FrameRecord(**d)
                 if video_stem is not None and rec.video_stem != video_stem:
+                    continue
+                if character_slug is not None and rec.character_slug != character_slug:
                     continue
                 yield rec
