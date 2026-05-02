@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "$lib/api";
+  import { colorForSlug } from "$lib/characterColors";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
@@ -33,6 +34,12 @@
     const match = chars.find((c) => c.slug === frame.character_slug);
     return match?.name ?? frame.character_slug;
   });
+  // Per-character color so two characters' badges in the same grid don't
+  // both read as "the indigo one". Looked up against the project's
+  // characters list — orphan slugs fall back to palette[0].
+  let characterColor = $derived(
+    colorForSlug(frame.character_slug, projectsStore.active?.characters ?? []),
+  );
   // Local override so a fresh save through the description modal flips the
   // badge without us having to refetch the whole frames list.
   let hasDescriptionLocal = $state<boolean | null>(null);
@@ -297,7 +304,7 @@
        in per-character filters where every visible tile has the same owner. -->
   {#if characterBadge}
     <span
-      class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 text-[9px] bg-accent-500/80 backdrop-blur-sm rounded text-white z-20 pointer-events-none shadow-[0_1px_4px_rgba(0,0,0,0.4)]"
+      class="absolute bottom-1.5 left-1.5 px-1.5 py-0.5 text-[9px] {characterColor.bgSoft} backdrop-blur-sm rounded text-white z-20 pointer-events-none shadow-[0_1px_4px_rgba(0,0,0,0.4)]"
       title="Routed to {characterBadge}"
     >
       {characterBadge}

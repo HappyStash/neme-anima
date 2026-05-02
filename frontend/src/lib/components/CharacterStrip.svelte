@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "$lib/api";
+  import { colorForIndex } from "$lib/characterColors";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
 
@@ -110,13 +111,15 @@
     >{chip.label}</button>
   {/each}
 
-  {#each characters as c (c.slug)}
+  {#each characters as c, i (c.slug)}
     {@const active = activeKey === c.slug}
+    {@const color = colorForIndex(i)}
     <div
-      class="h-7 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors
+      class="h-7 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors pr-1
         {active
-          ? 'gradient-accent text-white shadow-[0_2px_8px_rgba(99,102,241,0.3)] pr-1'
-          : 'bg-ink-900 border border-ink-700 text-slate-300 hover:bg-ink-800 hover:text-slate-100 pr-1'}"
+          ? `${color.bgActive} ${color.borderActive} border text-white`
+          : 'bg-ink-900 border border-ink-700 text-slate-300 hover:bg-ink-800 hover:text-slate-100'}"
+      style={active ? `box-shadow: 0 2px 8px ${color.glow}` : undefined}
     >
       {#if renaming === c.slug && editable}
         <input
@@ -135,9 +138,19 @@
           type="button"
           onclick={() => onselect(c.slug)}
           ondblclick={() => editable && startRename(c.slug, c.name)}
-          class="pl-3 inline-flex items-center gap-1.5 h-full"
+          class="pl-2.5 inline-flex items-center gap-1.5 h-full"
           title={editable ? "Click to select · double-click to rename" : "Click to select"}
         >
+          <!-- Per-character color swatch. Visible on inactive chips so the
+               user can pair "this character is the green one" with the
+               badges painted on FrameThumb tiles. Active chips already have
+               the color as their background; the swatch then reads as a
+               subtle inner highlight. -->
+          <span
+            class="w-2 h-2 rounded-full flex-shrink-0
+              {active ? 'bg-white/70' : color.dot}"
+            aria-hidden="true"
+          ></span>
           <span>{c.name}</span>
           <span class="opacity-70 tabular-nums">({c.ref_count})</span>
         </button>

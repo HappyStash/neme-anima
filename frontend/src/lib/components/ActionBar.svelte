@@ -1,5 +1,6 @@
 <script lang="ts">
   import * as api from "$lib/api";
+  import { colorForIndex } from "$lib/characterColors";
   import { framesStore } from "$lib/stores/frames.svelte";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
@@ -319,8 +320,9 @@
                 <div class="px-3 py-1 text-[10px] uppercase tracking-wide text-slate-500 border-b border-ink-800 mb-1">
                   Click name to move · + Also to duplicate
                 </div>
-                {#each characters as c (c.slug)}
+                {#each characters as c, i (c.slug)}
                   {@const isCurrent = sharedOwnerSlug === c.slug}
+                  {@const color = colorForIndex(i)}
                   <div
                     class="flex items-center gap-1 px-1 py-0.5
                       {isCurrent ? 'opacity-60' : ''}"
@@ -335,6 +337,10 @@
                         : `Move selected frames to ${c.name}`}
                       class="flex-1 text-left px-2 py-1 text-xs rounded hover:bg-ink-800 disabled:hover:bg-transparent disabled:cursor-not-allowed flex items-center gap-2"
                     >
+                      <span
+                        class="w-2 h-2 rounded-full flex-shrink-0 {color.dot}"
+                        aria-hidden="true"
+                      ></span>
                       <span class="text-slate-200 truncate">{c.name}</span>
                       <span class="text-slate-500 tabular-nums text-[10px]">
                         ({c.ref_count})
