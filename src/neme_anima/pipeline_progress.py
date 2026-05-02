@@ -49,11 +49,13 @@ EXTRACT_STAGES: list[tuple[str, str]] = [
     ("detect", "Person detection"),
     ("track", "Tracking"),
     ("identify", "Identify · select · save"),
+    ("dedup", "Dedup"),
     ("tag", "Tagging"),
 ]
 
 RERUN_STAGES: list[tuple[str, str]] = [
     ("setup", "Setup"),
     ("identify", "Identify · select · save"),
+    ("dedup", "Dedup"),
     ("tag", "Tagging"),
 ]

@@ -6,12 +6,14 @@ const EXTRACT_STAGE_KEYS: Array<[string, string]> = [
   ["detect", "Person detection"],
   ["track", "Tracking"],
   ["identify", "Identify · select · save"],
+  ["dedup", "Dedup"],
   ["tag", "Tagging"],
 ];
 
 const RERUN_STAGE_KEYS: Array<[string, string]> = [
   ["setup", "Setup"],
   ["identify", "Identify · select · save"],
+  ["dedup", "Dedup"],
   ["tag", "Tagging"],
 ];
 

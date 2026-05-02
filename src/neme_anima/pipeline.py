@@ -15,6 +15,7 @@ from rich.progress import (
 
 from neme_anima.config import Thresholds
 from neme_anima.crop import crop_frame
+from neme_anima.dedup import dedup_kept_for_video
 from neme_anima.detect import Detector, FrameDetections
 from neme_anima.frame_select import select_frames
 from neme_anima.identify import Identifier, Verdict
@@ -198,15 +199,27 @@ def _run_extract_inner(
         message=f"kept {kept} · rejected {rejected}",
     )
 
+    dedup_report = dedup_kept_for_video(
+        project=project, video_stem=video_stem,
+        cfg=thresholds.dedup, progress=progress,
+    )
+
     _run_tag_stage(
         project=project, video_stem=video_stem, thresholds=thresholds,
         progress=progress, pause=project.pause_before_tag,
     )
 
-    progress.finish({"kept": kept, "rejected": rejected})
+    progress.finish({
+        "kept": kept - dedup_report.removed,
+        "rejected": rejected + dedup_report.removed,
+        "deduped": dedup_report.removed,
+    })
 
     console.rule("[bold green]done[/bold green]")
-    console.print(f"kept: {kept}  rejected: {rejected}  output: {project.kept_dir}")
+    console.print(
+        f"kept: {kept - dedup_report.removed}  rejected: {rejected + dedup_report.removed}"
+        f"  (dedup removed {dedup_report.removed})  output: {project.kept_dir}"
+    )
 
 
 def _run_tag_stage(
@@ -418,10 +431,19 @@ def _run_rerun_inner(
             )
     progress.stage_done("identify", message=f"kept {kept} · rejected {rejected}")
 
+    dedup_report = dedup_kept_for_video(
+        project=project, video_stem=video_stem,
+        cfg=thresholds.dedup, progress=progress,
+    )
+
     _run_tag_stage(
         project=project, video_stem=video_stem, thresholds=thresholds,
         progress=progress, pause=project.pause_before_tag,
     )
 
-    progress.finish({"kept": kept, "rejected": rejected})
+    progress.finish({
+        "kept": kept - dedup_report.removed,
+        "rejected": rejected + dedup_report.removed,
+        "deduped": dedup_report.removed,
+    })
     console.rule("[bold green]rerun done[/bold green]")

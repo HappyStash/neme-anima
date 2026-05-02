@@ -68,6 +68,20 @@ class TagConfig:
 
 
 @dataclass
+class DedupConfig:
+    """Perceptual dedup pass over kept crops using CCIP embeddings.
+
+    Cross-tracklet near-duplicates leak past the in-tracklet frame-gap dedup —
+    OP/ED frames repeating across episodes, near-identical poses across cuts,
+    etc. Off by default so users opt in once they've seen what the threshold
+    removes; matches survive to ``rejected/`` rather than being deleted.
+    """
+    enabled: bool = False
+    distance_threshold: float = 0.05  # CCIP distance below this = duplicate
+    move_to_rejected: bool = True     # False = delete; True = move to rejected/
+
+
+@dataclass
 class Thresholds:
     scene: SceneConfig = field(default_factory=SceneConfig)
     detect: DetectConfig = field(default_factory=DetectConfig)
@@ -76,6 +90,7 @@ class Thresholds:
     frame_select: FrameSelectConfig = field(default_factory=FrameSelectConfig)
     crop: CropConfig = field(default_factory=CropConfig)
     tag: TagConfig = field(default_factory=TagConfig)
+    dedup: DedupConfig = field(default_factory=DedupConfig)
 
     def to_json(self, path: Path) -> None:
         path.write_text(json.dumps(asdict(self), indent=2))
@@ -92,4 +107,5 @@ class Thresholds:
             crop=CropConfig(**data.get("crop", {})),
             tag=TagConfig(**{**data.get("tag", {}),
                             "exclude_tags": tuple(data.get("tag", {}).get("exclude_tags", ()))}),
+            dedup=DedupConfig(**data.get("dedup", {})),
         )
