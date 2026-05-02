@@ -182,6 +182,53 @@ async def test_preview_only_counts_files_for_this_video_stem(
     assert body["to_wipe"]["total"] == 1  # just the ep01 frame
 
 
+async def test_preview_only_counts_files_actually_on_disk(
+    client, project: Project, tmp_path: Path,
+):
+    """Stale kept=True metadata rows whose physical files are no longer
+    in kept_dir (moved to rejected/ by dedup, manually deleted, etc.)
+    must NOT appear in the preview totals. The modal explains what the
+    next Extract / Re-process will wipe — and the wipe only touches
+    files actually on disk. Counting metadata-only rows scares the user
+    with phantom 'will replace 202 frames' totals when only 20 of those
+    files still exist."""
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    project.add_source(vid)
+    img = tmp_path / "ref.png"; img.write_bytes(b"\x89PNG\r\n\x1a\n")
+    project.add_ref(img)
+    # 2 default frames on disk (will-wipe), 1 mio frame on disk (preserve).
+    _seed(project, filename="ep01__yui_a", character_slug=DEFAULT_CHARACTER_SLUG)
+    _seed(project, filename="ep01__yui_b", character_slug=DEFAULT_CHARACTER_SLUG)
+    _seed(project, filename="ep01__mio_a", character_slug="mio")
+    # 5 phantom kept=True rows for the ACTIVE character with no file on disk
+    # — these must be ignored, not counted as 5 more frames to wipe.
+    for i in range(5):
+        MetadataLog(project.metadata_path).append(FrameRecord(
+            filename=f"ep01__phantom_{i}", kept=True,
+            scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+            ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+            score=0.9, video_stem="ep01",
+            character_slug=DEFAULT_CHARACTER_SLUG,
+        ))
+    # 3 phantom kept=True rows for the PRESERVED character with no file on
+    # disk — these must also drop out of the preserve total.
+    for i in range(3):
+        MetadataLog(project.metadata_path).append(FrameRecord(
+            filename=f"ep01__phantom_mio_{i}", kept=True,
+            scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+            ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+            score=0.9, video_stem="ep01", character_slug="mio",
+        ))
+
+    body = (await client.get(f"/api/projects/{project.slug}/sources/0/wipe-preview")).json()
+    assert body["to_wipe"]["by_character"] == {DEFAULT_CHARACTER_SLUG: 2}
+    assert body["to_wipe"]["total"] == 2
+    assert body["to_preserve"]["by_character"] == {"mio": 1}
+    assert body["to_preserve"]["total"] == 1
+
+
 async def test_preview_404_for_unknown_source_index(client, project: Project):
     resp = await client.get(f"/api/projects/{project.slug}/sources/99/wipe-preview")
     assert resp.status_code == 404

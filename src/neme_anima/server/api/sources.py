@@ -162,28 +162,36 @@ async def wipe_preview(request: Request, slug: str, idx: int) -> dict:
     preserve = _preserve_set_from_refs_by_slug(project, refs_by_slug)
     active_slugs = sorted(s for s, refs in refs_by_slug.items() if refs)
 
+    # Walk kept_dir for files actually present and attribute each via
+    # metadata. Iterating the metadata log instead would surface phantom
+    # rows for frames whose physical file is gone (dedup demoted to
+    # rejected/, user manually deleted, prior wipe ran without metadata
+    # cleanup) — and the modal would then warn about wiping frames that
+    # don't exist. The wipe itself only touches files on disk, so the
+    # preview must too.
     owners = _kept_frame_owners(project, video_stem)
     to_wipe_kept: Counter = Counter()
     to_preserve: Counter = Counter()
-    for slug_owner in owners.values():
-        if slug_owner in preserve:
-            to_preserve[slug_owner] += 1
-        else:
-            to_wipe_kept[slug_owner] += 1
-
-    # Untracked kept files (no metadata) — preserved by default.
     prefix = f"{video_stem}__"
     if project.kept_dir.exists():
         from neme_anima.storage.project import CROP_SUFFIX
         for f in project.kept_dir.iterdir():
             if not f.is_file() or not f.name.startswith(prefix):
                 continue
-            if f.suffix == ".png":
-                stem = f.stem
-                if stem.endswith(CROP_SUFFIX):
-                    stem = stem[: -len(CROP_SUFFIX)]
-                if stem not in owners:
-                    to_preserve["__untracked__"] += 1
+            if f.suffix != ".png":
+                continue
+            # Crop derivatives ride with the original's ownership and
+            # are wiped/preserved alongside it — count one per logical
+            # frame so the totals match the user-facing frames view.
+            if f.stem.endswith(CROP_SUFFIX):
+                continue
+            owner = owners.get(f.stem)
+            if owner is None:
+                to_preserve["__untracked__"] += 1
+            elif owner in preserve:
+                to_preserve[owner] += 1
+            else:
+                to_wipe_kept[owner] += 1
 
     # Rejected files always wipe — count separately so the UI can
     # surface them as "diagnostic samples" distinct from character data.
