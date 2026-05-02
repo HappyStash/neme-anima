@@ -74,6 +74,54 @@
       && !job.stages.some((s) => s.status === "failed");
   });
   let actionsDisabled = $derived(busy || pipelineActive);
+
+  // ---- smart Extract / Re-process state ----
+  // The buttons mean different things depending on the detection cache.
+  // We render both at all times (so the user can always force the path
+  // they want) but mute the redundant one and fence off the dangerous one
+  // with a tooltip + disabled state.
+  let cacheState = $derived(source.extraction_cache);
+
+  /** Extract is the heavy "scan from scratch" pipeline. Disabled when
+   *  there's a fresh cache and no scan-affecting threshold has changed
+   *  — the user would just be paying the YOLO cost again for no reason. */
+  let extractDisabled = $derived(
+    actionsDisabled || activeRefs === 0 || cacheState === "current",
+  );
+  let extractTooltip = $derived(
+    pipelineActive
+      ? "Pipeline already running"
+      : activeRefs === 0
+        ? "Add at least one active reference for the current character"
+        : cacheState === "current"
+          ? "Already extracted with these scan settings — use Re-process to re-evaluate identification, frames, dedup, or tags"
+          : cacheState === "stale"
+            ? "Scene / detection / tracking settings changed since last extract — Extract will rebuild the detection cache"
+            : "Run the full pipeline: detect every character in every scene, track them, identify, crop, and tag",
+  );
+  /** Visual emphasis: primary when there's no cache OR cache went stale,
+   *  muted when we'd rather the user click Re-process. */
+  let extractPrimary = $derived(
+    cacheState === "none" || cacheState === "stale",
+  );
+
+  /** Re-process replays identification/selection/crop/dedup/tag with
+   *  the cached scenes + tracklets. Disabled when there's no cache. */
+  let rerunDisabled = $derived(
+    actionsDisabled || activeRefs === 0 || cacheState === "none",
+  );
+  let rerunTooltip = $derived(
+    pipelineActive
+      ? "Pipeline already running"
+      : activeRefs === 0
+        ? "Add at least one active reference for the current character"
+        : cacheState === "none"
+          ? "No detection cache yet — run Extract first to build it"
+          : cacheState === "stale"
+            ? "Detection cache is stale (scan settings changed) — Re-process will use the OLD detections; consider Extract instead"
+            : "Quickly re-evaluate identification, frame selection, dedup, and tagging using the cached detections — typically under a minute",
+  );
+  let rerunPrimary = $derived(cacheState === "current");
 </script>
 
 <div
@@ -120,17 +168,31 @@
     <button
       type="button"
       onclick={run}
-      disabled={actionsDisabled || activeRefs === 0}
-      title={pipelineActive ? "Pipeline already running" : ""}
-      class="px-3 py-1.5 text-xs rounded gradient-accent text-white disabled:opacity-40 disabled:cursor-not-allowed shadow-[0_2px_8px_rgba(99,102,241,0.3)]"
-    >Run</button>
+      disabled={extractDisabled}
+      title={extractTooltip}
+      class="px-3 py-1.5 text-xs rounded inline-flex items-center gap-1
+        disabled:opacity-40 disabled:cursor-not-allowed
+        {extractPrimary
+          ? 'gradient-accent text-white shadow-[0_2px_8px_rgba(99,102,241,0.3)]'
+          : 'bg-ink-800 hover:bg-ink-700 text-slate-300 border border-ink-700'}"
+    >
+      Extract{#if cacheState === "stale"}
+        <!-- Subtle warning glyph: the existing detection cache no longer
+             reflects the current scene/detect/track settings. Click to
+             rebuild from scratch. -->
+        <span aria-hidden="true" class="text-amber-300" title="Scan settings changed since last extract">!</span>
+      {/if}
+    </button>
     <button
       type="button"
       onclick={rerun}
-      disabled={actionsDisabled}
-      title={pipelineActive ? "Pipeline already running" : ""}
-      class="px-3 py-1.5 text-xs rounded bg-ink-800 hover:bg-ink-700 text-slate-300 border border-ink-700 disabled:opacity-40 disabled:cursor-not-allowed"
-    >Rerun</button>
+      disabled={rerunDisabled}
+      title={rerunTooltip}
+      class="px-3 py-1.5 text-xs rounded inline-flex items-center disabled:opacity-40 disabled:cursor-not-allowed
+        {rerunPrimary
+          ? 'gradient-accent text-white shadow-[0_2px_8px_rgba(99,102,241,0.3)]'
+          : 'bg-ink-800 hover:bg-ink-700 text-slate-300 border border-ink-700'}"
+    >Re-process</button>
   </div>
   <button
     type="button"

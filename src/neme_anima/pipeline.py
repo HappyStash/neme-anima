@@ -17,6 +17,7 @@ from neme_anima.config import Thresholds
 from neme_anima.crop import crop_frame
 from neme_anima.dedup import dedup_kept_for_video
 from neme_anima.detect import Detector, FrameDetections
+from neme_anima.extraction_cache import stamp_meta
 from neme_anima.frame_select import select_frames
 from neme_anima.identify import MultiCharacterRouter
 from neme_anima.output import OutputWriter
@@ -154,6 +155,11 @@ def _run_extract_inner(
             tracklets.extend(track_scene(scene.index, scene_dets, track_cfg))
     console.print(f"tracklets: {len(tracklets)}")
     writer.write_tracklets(tracklets)
+    # Stamp the cache freshness snapshot AFTER the parquet writes so the
+    # state on disk is internally consistent — extraction_meta.json is
+    # written if and only if both scenes.parquet and tracklets.parquet
+    # are present and reflect the current scene/detect/track thresholds.
+    stamp_meta(project, video_stem, thresholds)
     progress.stage_done("track", message=f"{len(tracklets)} tracklet{'s' if len(tracklets)!=1 else ''}")
 
     progress.stage_start(

@@ -11,6 +11,17 @@ export interface Source {
   /** True when the project has at least one kept frame on disk for this
    *  video stem — survives server restarts. */
   extracted: boolean;
+  /** Detection-cache freshness for this source's video. Drives the smart
+   *  Extract / Re-process button states.
+   *   - "none": no cache yet — Extract is the only path forward.
+   *   - "current": cache is fresh and scan-affecting (scene/detect/track)
+   *     thresholds haven't changed since it was stamped — Re-process is
+   *     enough; Extract is disabled to steer the user away from a wasted
+   *     re-scan.
+   *   - "stale": cache exists but at least one scan-affecting threshold
+   *     differs — Re-process would silently use stale detections, so the
+   *     UI flags Extract with a warning. */
+  extraction_cache: "none" | "current" | "stale";
 }
 
 export interface RefImage {

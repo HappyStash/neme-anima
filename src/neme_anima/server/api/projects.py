@@ -9,6 +9,8 @@ from pathlib import Path
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel
 
+from neme_anima.config import Thresholds
+from neme_anima.extraction_cache import cache_state_for_source
 from neme_anima.storage.project import Project
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -42,16 +44,41 @@ class DeleteProjectBody(BaseModel):
     delete_files: bool = False
 
 
+def _resolve_current_thresholds(project: Project) -> Thresholds:
+    """Reproduce pipeline._resolve_thresholds without importing the heavy
+    pipeline module here — projects.py loads on every request and we want
+    to keep that cheap. Mirrors the override-merge contract exactly."""
+    base = Thresholds()
+    for section_name, section_overrides in (project.thresholds_overrides or {}).items():
+        section = getattr(base, section_name, None)
+        if section is None:
+            continue
+        for k, v in section_overrides.items():
+            if hasattr(section, k):
+                setattr(section, k, v)
+    return base
+
+
 def _project_view(project: Project) -> dict:
     extracted_stems = _stems_with_kept_frames(project)
+    current_thresholds = _resolve_current_thresholds(project)
     sources = []
-    for s in project.sources:
+    for i, s in enumerate(project.sources):
         d = asdict(s)
         # Drop the legacy "extraction_runs" field — it was never populated and
         # the UI doesn't use it. Replace with a persistent "extracted" flag
         # derived from on-disk kept frames so it survives restarts.
         d.pop("extraction_runs", None)
         d["extracted"] = Path(s.path).stem in extracted_stems
+        # ``extraction_cache`` drives the smart Extract / Re-process button
+        # states in the Sources tab:
+        #   - "none": no cache → Extract enabled, Re-process disabled
+        #   - "current": cache fresh + scan thresholds match → Extract muted
+        #   - "stale": cache exists but scene/detect/track thresholds drifted
+        #     → both buttons enabled, UI flags Extract as recommended
+        d["extraction_cache"] = cache_state_for_source(
+            project, i, current_thresholds,
+        )
         sources.append(d)
     return {
         "slug": project.slug,

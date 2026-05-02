@@ -66,6 +66,79 @@ async def test_get_missing_returns_404(client):
     assert resp.status_code == 404
 
 
+async def test_source_view_includes_extraction_cache_state(
+    client, tmp_path: Path,
+):
+    """The Sources tab needs ``extraction_cache`` per source to drive the
+    smart Extract / Re-process button states. A freshly-added video with
+    no detection cache must report 'none' so the UI keeps Re-process
+    disabled and Extract primary."""
+    project = Project.create(tmp_path / "p", name="p")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    project.add_source(vid)
+    await client.post(
+        "/api/projects/register", json={"folder": str(tmp_path / "p")},
+    )
+    body = (await client.get("/api/projects/p")).json()
+    assert body["sources"][0]["extraction_cache"] == "none"
+
+
+async def test_source_view_reports_current_after_stamp(
+    client, tmp_path: Path,
+):
+    """Stamping the cache snapshot externally (as run_extract does at
+    the end of the track stage) must flip the state to 'current' on the
+    next project view fetch — that's what unmutes Re-process and mutes
+    Extract."""
+    from neme_anima.config import Thresholds
+    from neme_anima.extraction_cache import stamp_meta
+
+    project = Project.create(tmp_path / "p", name="p")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    project.add_source(vid)
+    # Simulate a completed extract by writing a stub parquet + the meta.
+    cache_dir = project.cache_dir_for("ep01")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "tracklets.parquet").write_bytes(b"stub")
+    stamp_meta(project, "ep01", Thresholds())
+
+    await client.post(
+        "/api/projects/register", json={"folder": str(tmp_path / "p")},
+    )
+    body = (await client.get("/api/projects/p")).json()
+    assert body["sources"][0]["extraction_cache"] == "current"
+
+
+async def test_source_view_reports_stale_after_threshold_drift(
+    client, tmp_path: Path,
+):
+    """If the user changes a scan-affecting threshold (here: detect's
+    frame stride) AFTER the cache was stamped, the project view must
+    surface 'stale' so the UI can warn the user that Re-process would
+    silently use the old detections."""
+    from neme_anima.config import Thresholds
+    from neme_anima.extraction_cache import stamp_meta
+
+    project = Project.create(tmp_path / "p", name="p")
+    vid = tmp_path / "ep01.mkv"; vid.write_bytes(b"")
+    project.add_source(vid)
+    cache_dir = project.cache_dir_for("ep01")
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    (cache_dir / "tracklets.parquet").write_bytes(b"stub")
+    # Stamp with the dataclass defaults, then bump frame_stride in the
+    # project's overrides — the next view fetch resolves thresholds with
+    # the new stride and sees the snapshot diverge.
+    stamp_meta(project, "ep01", Thresholds())
+    project.thresholds_overrides = {"detect": {"frame_stride": 8}}
+    project.save()
+
+    await client.post(
+        "/api/projects/register", json={"folder": str(tmp_path / "p")},
+    )
+    body = (await client.get("/api/projects/p")).json()
+    assert body["sources"][0]["extraction_cache"] == "stale"
+
+
 async def test_get_registered_but_files_deleted_returns_404(client, tmp_path: Path):
     """Registry entry survives but project folder/files are gone — must 404, not 500."""
     import shutil
