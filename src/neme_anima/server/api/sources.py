@@ -130,6 +130,85 @@ async def patch_source(
     return {"excluded_refs": project.sources[idx].excluded_refs}
 
 
+@router.get("/{slug}/sources/{idx}/wipe-preview")
+async def wipe_preview(request: Request, slug: str, idx: int) -> dict:
+    """Return what an Extract / Re-process on this source would wipe.
+
+    The Sources tab calls this BEFORE firing extract or rerun and shows
+    a confirmation modal when ``to_wipe.total > 0`` so the user is never
+    surprised by lost work. The breakdown by character lets the user
+    decide whether to opt-out a character's refs (and so preserve its
+    frames) before clicking through.
+
+    Implementation note: we re-build the same per-character refs map
+    that the pipeline does, then walk the metadata log to attribute
+    every kept frame matching the stem. Rejected files are listed in
+    ``to_wipe`` regardless of attribution because they always wipe.
+    """
+    from collections import Counter
+
+    from neme_anima.pipeline import (
+        _kept_frame_owners,
+        _preserve_set_from_refs_by_slug,
+        _refs_by_character,
+    )
+
+    project = _load(request, slug)
+    if idx < 0 or idx >= len(project.sources):
+        raise HTTPException(status_code=404, detail="source index out of range")
+
+    video_stem = project.video_stem(idx)
+    refs_by_slug = _refs_by_character(project, idx)
+    preserve = _preserve_set_from_refs_by_slug(project, refs_by_slug)
+    active_slugs = sorted(s for s, refs in refs_by_slug.items() if refs)
+
+    owners = _kept_frame_owners(project, video_stem)
+    to_wipe_kept: Counter = Counter()
+    to_preserve: Counter = Counter()
+    for slug_owner in owners.values():
+        if slug_owner in preserve:
+            to_preserve[slug_owner] += 1
+        else:
+            to_wipe_kept[slug_owner] += 1
+
+    # Untracked kept files (no metadata) — preserved by default.
+    prefix = f"{video_stem}__"
+    if project.kept_dir.exists():
+        from neme_anima.storage.project import CROP_SUFFIX
+        for f in project.kept_dir.iterdir():
+            if not f.is_file() or not f.name.startswith(prefix):
+                continue
+            if f.suffix == ".png":
+                stem = f.stem
+                if stem.endswith(CROP_SUFFIX):
+                    stem = stem[: -len(CROP_SUFFIX)]
+                if stem not in owners:
+                    to_preserve["__untracked__"] += 1
+
+    # Rejected files always wipe — count separately so the UI can
+    # surface them as "diagnostic samples" distinct from character data.
+    rejected_total = 0
+    if project.rejected_dir.exists():
+        for f in project.rejected_dir.iterdir():
+            if f.is_file() and f.name.startswith(prefix):
+                rejected_total += 1
+
+    return {
+        "video_stem": video_stem,
+        "active_slugs": active_slugs,
+        "preserve_slugs": sorted(preserve),
+        "to_wipe": {
+            "by_character": dict(to_wipe_kept),
+            "rejected_samples": rejected_total,
+            "total": int(sum(to_wipe_kept.values()) + rejected_total),
+        },
+        "to_preserve": {
+            "by_character": dict(to_preserve),
+            "total": int(sum(to_preserve.values())),
+        },
+    }
+
+
 @router.post("/{slug}/sources/{idx}/extract", status_code=202)
 async def extract(request: Request, slug: str, idx: int) -> dict:
     project = _load(request, slug)

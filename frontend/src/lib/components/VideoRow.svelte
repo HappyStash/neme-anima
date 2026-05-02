@@ -1,9 +1,11 @@
 <script lang="ts">
   import * as api from "$lib/api";
+  import type { WipePreview } from "$lib/api";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { jobsStore } from "$lib/stores/jobs.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
   import type { RefImage, Source } from "$lib/types";
+  import ConfirmWipeModal from "./ConfirmWipeModal.svelte";
   import PipelineRunner from "./PipelineRunner.svelte";
   import RefStrip from "./RefStrip.svelte";
 
@@ -16,6 +18,13 @@
   };
   const { source, sourceIdx, projectRefs }: Props = $props();
 
+  // When set, the confirmation modal renders. Cancel clears it; confirm
+  // calls the underlying action and clears it.
+  let pendingAction = $state<{
+    kind: "Extract" | "Re-process";
+    preview: WipePreview;
+  } | null>(null);
+
   // Per-video opt-outs are now keyed by character slug — surface only the
   // active character's list so the existing "active refs" math still
   // works on a flat array of paths.
@@ -26,13 +35,21 @@
   let busy = $state(false);
   let thumbBroken = $state(false);
 
+  /** Fetch the wipe preview, then either short-circuit straight to the
+   *  job submission (nothing to wipe — first-time extract is the
+   *  common case) or open the confirmation modal. The modal's confirm
+   *  handler calls submitJob. Cancel just clears pendingAction. */
   async function run() {
     const slug = projectsStore.active?.slug;
-    if (!slug) return;
+    if (!slug || busy) return;
     busy = true;
     try {
-      const { job_id } = await api.extractSource(slug, sourceIdx);
-      jobsStore.seedPending({ job_id, project: slug, source_idx: sourceIdx, kind: "extract" });
+      const preview = await api.sourceWipePreview(slug, sourceIdx);
+      if (preview.to_wipe.total === 0) {
+        await submitExtract(slug);
+      } else {
+        pendingAction = { kind: "Extract", preview };
+      }
     } finally {
       busy = false;
     }
@@ -40,14 +57,46 @@
 
   async function rerun() {
     const slug = projectsStore.active?.slug;
-    if (!slug) return;
+    if (!slug || busy) return;
     busy = true;
     try {
-      const { job_id } = await api.rerunSource(slug, sourceIdx);
-      jobsStore.seedPending({ job_id, project: slug, source_idx: sourceIdx, kind: "rerun" });
+      const preview = await api.sourceWipePreview(slug, sourceIdx);
+      if (preview.to_wipe.total === 0) {
+        await submitRerun(slug);
+      } else {
+        pendingAction = { kind: "Re-process", preview };
+      }
     } finally {
       busy = false;
     }
+  }
+
+  async function submitExtract(slug: string) {
+    const { job_id } = await api.extractSource(slug, sourceIdx);
+    jobsStore.seedPending({ job_id, project: slug, source_idx: sourceIdx, kind: "extract" });
+  }
+
+  async function submitRerun(slug: string) {
+    const { job_id } = await api.rerunSource(slug, sourceIdx);
+    jobsStore.seedPending({ job_id, project: slug, source_idx: sourceIdx, kind: "rerun" });
+  }
+
+  async function confirmPending() {
+    const action = pendingAction;
+    pendingAction = null;
+    const slug = projectsStore.active?.slug;
+    if (!slug || !action) return;
+    busy = true;
+    try {
+      if (action.kind === "Extract") await submitExtract(slug);
+      else await submitRerun(slug);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function cancelPending() {
+    pendingAction = null;
   }
 
   async function remove() {
@@ -202,3 +251,12 @@
     class="text-slate-600 hover:text-red-400 text-xs px-2 py-1 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:text-slate-600"
   >✕</button>
 </div>
+
+{#if pendingAction}
+  <ConfirmWipeModal
+    preview={pendingAction.preview}
+    action={pendingAction.kind}
+    onconfirm={confirmPending}
+    oncancel={cancelPending}
+  />
+{/if}

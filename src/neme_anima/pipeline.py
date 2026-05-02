@@ -82,19 +82,28 @@ def _run_extract_inner(
         )
 
     writer = OutputWriter(project=project, video_stem=video_stem)
-    # Replace any outputs from a previous Extract on this video. Without
-    # this, frames produced by a prior run (different refs, different
-    # characters, different scan thresholds — anything that produced
-    # them under different settings) survive into the new Run's tagging
-    # pass and silently pollute the dataset. Re-process already does
-    # this; Extract should match. Manual edits the user made on stale
-    # frames are sacrificed by design — Extract is the from-scratch
-    # path, Re-process is the iteration loop that preserves the
-    # detection cache (and thus filename stability for curated frames).
-    _wipe_outputs_for_stem(project, video_stem)
+    # Scoped wipe: clear only frames belonging to characters that are
+    # active in THIS run (those with at least one effective ref). Frames
+    # whose owning character has all refs opted-out for this source are
+    # preserved — the user's curation on those characters survives.
+    # Rejected samples always wipe regardless. The legacy "wipe
+    # everything" behaviour is recoverable by clearing per-character
+    # refs OR by deleting the files manually.
+    preserve_slugs = _preserve_set_from_refs_by_slug(project, refs_by_slug)
+    wipe_report = _wipe_outputs_for_stem(
+        project, video_stem, preserve_owned_by=preserve_slugs,
+    )
     console.rule(f"[bold]neme-anima[/bold] :: {video_path.name}")
     total_refs = sum(len(v) for v in refs_by_slug.values())
     active_chars = sum(1 for v in refs_by_slug.values() if v)
+    if wipe_report["preserved"]:
+        console.print(
+            f"preserved: {wipe_report['preserved']} frame"
+            f"{'s' if wipe_report['preserved'] != 1 else ''} from "
+            f"non-active character"
+            f"{'s' if len(preserve_slugs) != 1 else ''} "
+            f"({', '.join(sorted(preserve_slugs)) or 'none'})"
+        )
     console.print(
         f"refs: {total_refs} effective across {active_chars} "
         f"character{'s' if active_chars != 1 else ''}"
@@ -179,7 +188,7 @@ def _run_extract_inner(
     )
     with _make_progress() as p:
         task = p.add_task("identify+save", total=len(tracklets))
-        kept, rejected = 0, 0
+        kept, rejected, skipped_collisions = 0, 0, 0
         for tracklet in tracklets:
             routed = router.route_tracklet(tracklet, vid)
             if routed.character_slug is None:
@@ -198,13 +207,24 @@ def _run_extract_inner(
             ref_features = router.reference_features(routed.character_slug)
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
+                target_filename = OutputWriter.filename_for(
+                    video_stem=video_stem, scene_idx=pick.scene_idx,
+                    tracklet_id=pick.tracklet_id, frame_idx=pick.frame_idx,
+                )
+                target_png = project.kept_dir / f"{target_filename}.png"
+                # Collision guard: scoped wipe just deleted every file
+                # belonging to an active character, so any file still at
+                # this path must belong to a preserved (non-active)
+                # character. Yield to the preserved owner — overwriting
+                # would silently destroy curation that the user
+                # explicitly chose to keep by opting their character out.
+                if target_png.exists():
+                    skipped_collisions += 1
+                    continue
                 frame = vid.get(pick.frame_idx)
                 cropped = crop_frame(frame, pick.detection_bbox, thresholds.crop, compute_mask=False)
                 rec = FrameRecord(
-                    filename=OutputWriter.filename_for(
-                        video_stem=video_stem, scene_idx=pick.scene_idx,
-                        tracklet_id=pick.tracklet_id, frame_idx=pick.frame_idx,
-                    ),
+                    filename=target_filename,
                     kept=True,
                     scene_idx=pick.scene_idx, tracklet_id=pick.tracklet_id,
                     frame_idx=pick.frame_idx,
@@ -227,10 +247,10 @@ def _run_extract_inner(
                 f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
             )
 
-    progress.stage_done(
-        "identify",
-        message=f"kept {kept} · rejected {rejected}",
-    )
+    summary_msg = f"kept {kept} · rejected {rejected}"
+    if skipped_collisions:
+        summary_msg += f" · {skipped_collisions} preserved-owner collision(s) skipped"
+    progress.stage_done("identify", message=summary_msg)
 
     dedup_report = dedup_kept_for_video(
         project=project, video_stem=video_stem,
@@ -422,19 +442,128 @@ def _refs_by_character(project: Project, source_idx: int) -> dict[str, list[Path
     return out
 
 
-def _wipe_outputs_for_stem(project: Project, video_stem: str) -> None:
-    """Delete only the kept/rejected files belonging to one video, identified by
-    the ``<video_stem>__`` filename prefix. The trailing double-underscore
-    separator is what makes this safe — a video named ``ep01ext`` produces the
-    prefix ``ep01ext__`` which never collides with ``ep01__``.
+def _kept_frame_owners(project: Project, video_stem: str) -> dict[str, str]:
+    """Return ``{filename_stem: character_slug}`` for kept frames of this video.
+
+    Last-write-wins per filename — a frame moved to a different character
+    is counted under its new owner only. Used by the scoped-wipe path to
+    decide which files to preserve based on ownership. Frames whose latest
+    record is rejected (kept=False) drop out: the wipe treats them as
+    diagnostic samples, not curation, and always deletes them.
+    """
+    from neme_anima.storage.metadata import MetadataLog
+
+    log = MetadataLog(project.metadata_path)
+    latest: dict[str, tuple[bool, str]] = {}
+    for rec in log.iter_records(video_stem=video_stem):
+        latest[rec.filename] = (rec.kept, rec.character_slug)
+    return {fn: slug for fn, (kept, slug) in latest.items() if kept}
+
+
+def _wipe_outputs_for_stem(
+    project: Project, video_stem: str,
+    *, preserve_owned_by: set[str] | None = None,
+) -> dict:
+    """Delete kept/rejected files belonging to one video.
+
+    By default (``preserve_owned_by=None``) wipes every file matching the
+    ``<video_stem>__`` prefix — the historical behaviour the test suite
+    pins. When ``preserve_owned_by`` is provided, KEPT files whose
+    owning character (per metadata last-write-wins) is in the set are
+    LEFT IN PLACE; the user's curation on those frames survives the run.
+
+    Rejected files always wipe regardless of preservation. They're
+    diagnostic samples written for review, not curated training data —
+    keeping stale ones around just clutters the rejected drawer.
+
+    Files with no metadata row (drag-dropped uploads, manually placed
+    files) are also preserved when ``preserve_owned_by`` is set —
+    we have no way to attribute them to a character, and silently
+    deleting unattributed user data would be the worst possible default.
+
+    Returns a small report ``{wiped: N, preserved: M, by_character: {…}}``
+    so the caller can both report it (UI summary) and make the wipe
+    preview accurate.
     """
     prefix = f"{video_stem}__"
-    for d in (project.kept_dir, project.rejected_dir):
-        if not d.exists():
-            continue
-        for f in d.iterdir():
+    owners = _kept_frame_owners(project, video_stem) if preserve_owned_by is not None else {}
+    wiped = 0
+    preserved = 0
+    preserved_by_char: dict[str, int] = {}
+    wiped_by_char: dict[str, int] = {}
+
+    # Wipe rejected unconditionally — diagnostic samples, not curation.
+    if project.rejected_dir.exists():
+        for f in project.rejected_dir.iterdir():
             if f.name.startswith(prefix):
                 f.unlink()
+
+    if not project.kept_dir.exists():
+        return {
+            "wiped": wiped, "preserved": preserved,
+            "preserved_by_character": preserved_by_char,
+            "wiped_by_character": wiped_by_char,
+        }
+
+    for f in project.kept_dir.iterdir():
+        if not f.name.startswith(prefix):
+            continue
+        if preserve_owned_by is None:
+            f.unlink()
+            wiped += 1
+            continue
+        # Preservation mode. Owner lookup is by stem — same key the
+        # metadata log uses. Crop derivatives ride with their parent's
+        # ownership: the `_crop` suffix is stripped before the lookup so
+        # both the original PNG and its `_crop.png` derivative share the
+        # same fate (preserve both or wipe both).
+        from neme_anima.storage.project import CROP_SUFFIX
+        stem = f.stem
+        # Strip the .crop.json kind too — the spec sidecar's stem ends in
+        # ".crop" before the json suffix.
+        if stem.endswith(".crop"):
+            stem = stem[: -len(".crop")]
+        if stem.endswith(CROP_SUFFIX):
+            stem = stem[: -len(CROP_SUFFIX)]
+        owner = owners.get(stem)
+        if owner is None:
+            # No metadata → conservative preserve.
+            preserved += 1
+            preserved_by_char["__untracked__"] = (
+                preserved_by_char.get("__untracked__", 0) + 1
+            )
+            continue
+        if owner in preserve_owned_by:
+            preserved += 1
+            preserved_by_char[owner] = preserved_by_char.get(owner, 0) + 1
+            continue
+        f.unlink()
+        wiped += 1
+        wiped_by_char[owner] = wiped_by_char.get(owner, 0) + 1
+
+    return {
+        "wiped": wiped, "preserved": preserved,
+        "preserved_by_character": preserved_by_char,
+        "wiped_by_character": wiped_by_char,
+    }
+
+
+def _preserve_set_from_refs_by_slug(
+    project: Project, refs_by_slug: dict[str, list[Path]],
+) -> set[str]:
+    """The "non-active" characters for this run — those whose effective
+    ref list is empty — plus any project characters not in the map at all.
+
+    These are the slugs whose previously-extracted frames the scoped wipe
+    leaves alone. A character is "active" if it has at least one effective
+    ref for the source; everything else is preserved.
+    """
+    inactive: set[str] = set()
+    for c in project.characters:
+        refs = refs_by_slug.get(c.slug, [])
+        if not refs:
+            inactive.add(c.slug)
+    return inactive
 
 
 def run_rerun(
@@ -475,7 +604,23 @@ def _run_rerun_inner(
     vid = Video(Path(project.sources[source_idx].path))
     router = MultiCharacterRouter(refs_by_slug=refs_by_slug, cfg=thresholds.identify)
 
-    _wipe_outputs_for_stem(project, video_stem)
+    # Same scoped-wipe semantics as Extract: preserve frames belonging
+    # to non-active characters. Re-process is the iteration loop, so the
+    # preservation matters even more — a user typing in a new ref for
+    # one character shouldn't risk obliterating a sibling character's
+    # curated work.
+    preserve_slugs = _preserve_set_from_refs_by_slug(project, refs_by_slug)
+    wipe_report = _wipe_outputs_for_stem(
+        project, video_stem, preserve_owned_by=preserve_slugs,
+    )
+    if wipe_report["preserved"]:
+        console.print(
+            f"preserved: {wipe_report['preserved']} frame"
+            f"{'s' if wipe_report['preserved'] != 1 else ''} from "
+            f"non-active character"
+            f"{'s' if len(preserve_slugs) != 1 else ''} "
+            f"({', '.join(sorted(preserve_slugs)) or 'none'})"
+        )
     progress.stage_done(
         "setup",
         message=f"{len(tracklets)} cached tracklet{'s' if len(tracklets)!=1 else ''}",
@@ -488,7 +633,7 @@ def _run_rerun_inner(
     )
     with _make_progress() as p:
         task = p.add_task("rerun", total=len(tracklets))
-        kept, rejected = 0, 0
+        kept, rejected, skipped_collisions = 0, 0, 0
         for tracklet in tracklets:
             routed = router.route_tracklet(tracklet, vid)
             if routed.character_slug is None:
@@ -507,13 +652,23 @@ def _run_rerun_inner(
             ref_features = router.reference_features(routed.character_slug)
             picks = select_frames(tracklet, vid, ref_features, thresholds.frame_select)
             for pick in picks:
+                target_filename = OutputWriter.filename_for(
+                    video_stem=video_stem, scene_idx=pick.scene_idx,
+                    tracklet_id=pick.tracklet_id, frame_idx=pick.frame_idx,
+                )
+                target_png = project.kept_dir / f"{target_filename}.png"
+                # Same collision guard as Extract — yield to a preserved
+                # frame at the same path. Re-process with an unchanged
+                # detection cache means filenames are MORE likely to
+                # collide than in Extract (tracklet IDs are stable), so
+                # this guard fires more often here.
+                if target_png.exists():
+                    skipped_collisions += 1
+                    continue
                 frame = vid.get(pick.frame_idx)
                 cropped = crop_frame(frame, pick.detection_bbox, thresholds.crop, compute_mask=False)
                 rec = FrameRecord(
-                    filename=OutputWriter.filename_for(
-                        video_stem=video_stem, scene_idx=pick.scene_idx,
-                        tracklet_id=pick.tracklet_id, frame_idx=pick.frame_idx,
-                    ),
+                    filename=target_filename,
                     kept=True,
                     scene_idx=pick.scene_idx, tracklet_id=pick.tracklet_id,
                     frame_idx=pick.frame_idx,
@@ -532,7 +687,10 @@ def _run_rerun_inner(
                 "identify",
                 f"{kept + rejected} / {len(tracklets)} · kept {kept} · rejected {rejected}",
             )
-    progress.stage_done("identify", message=f"kept {kept} · rejected {rejected}")
+    summary_msg = f"kept {kept} · rejected {rejected}"
+    if skipped_collisions:
+        summary_msg += f" · {skipped_collisions} preserved-owner collision(s) skipped"
+    progress.stage_done("identify", message=summary_msg)
 
     dedup_report = dedup_kept_for_video(
         project=project, video_stem=video_stem,

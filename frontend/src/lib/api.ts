@@ -115,6 +115,26 @@ export const rerunSource = (slug: string, idx: number) =>
     { method: "POST" },
   );
 
+export interface WipePreview {
+  video_stem: string;
+  active_slugs: string[];
+  preserve_slugs: string[];
+  to_wipe: {
+    by_character: Record<string, number>;
+    rejected_samples: number;
+    total: number;
+  };
+  to_preserve: {
+    by_character: Record<string, number>;
+    total: number;
+  };
+}
+
+export const sourceWipePreview = (slug: string, idx: number) =>
+  request<WipePreview>(
+    `/api/projects/${encodeURIComponent(slug)}/sources/${idx}/wipe-preview`,
+  );
+
 // ---- refs ----
 
 export const addRefs = (slug: string, paths: string[], characterSlug?: string) => {
