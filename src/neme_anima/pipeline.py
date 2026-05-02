@@ -82,6 +82,16 @@ def _run_extract_inner(
         )
 
     writer = OutputWriter(project=project, video_stem=video_stem)
+    # Replace any outputs from a previous Extract on this video. Without
+    # this, frames produced by a prior run (different refs, different
+    # characters, different scan thresholds — anything that produced
+    # them under different settings) survive into the new Run's tagging
+    # pass and silently pollute the dataset. Re-process already does
+    # this; Extract should match. Manual edits the user made on stale
+    # frames are sacrificed by design — Extract is the from-scratch
+    # path, Re-process is the iteration loop that preserves the
+    # detection cache (and thus filename stability for curated frames).
+    _wipe_outputs_for_stem(project, video_stem)
     console.rule(f"[bold]neme-anima[/bold] :: {video_path.name}")
     total_refs = sum(len(v) for v in refs_by_slug.values())
     active_chars = sum(1 for v in refs_by_slug.values() if v)
