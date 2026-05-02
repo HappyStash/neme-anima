@@ -222,7 +222,7 @@ def test_thresholds_from_json_tolerates_missing_dedup_section(tmp_path: Path):
         "scene": {"threshold": 27.0, "min_scene_len_frames": 8},
     }))
     loaded = Thresholds.from_json(path)
-    assert loaded.dedup.distance_threshold == 0.05
+    assert loaded.dedup.distance_threshold == 0.02
     assert loaded.dedup.lookback_frames == 1000
     assert loaded.dedup.move_to_rejected is True
 

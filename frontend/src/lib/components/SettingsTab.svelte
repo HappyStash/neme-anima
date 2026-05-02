@@ -78,8 +78,8 @@
           help: "WD14 confidence cutoff for character tags. Kept high to avoid false character matches." },
       ]},
     { key: "dedup", label: "Dedup (kept crops)", fields: [
-        { name: "distance_threshold", type: "number", placeholder: "0.05",
-          help: "CCIP distance below which two crops are considered duplicates. Always-on dedup runs between identify and tag — this knob just tunes how aggressive it is. Default 0.05 only collapses near-pixel-identical crops; well below the 0.15 same-character threshold so different poses survive." },
+        { name: "distance_threshold", type: "number", placeholder: "0.02",
+          help: "CCIP distance below which two crops are considered duplicates. Always-on dedup runs between identify and tag — this knob just tunes how aggressive it is. Default 0.02 only collapses near-pixel-identical crops; well below the 0.15 same-character threshold so different poses survive." },
         { name: "lookback_frames", type: "number", placeholder: "1000",
           help: "Maximum frame_idx delta between two crops for them to be duplicate-eligible. Restricts dedup to a sliding temporal window so visually similar but temporally distant shots stay distinct. Default 1000 ≈ 40 seconds at 24 fps. 0 = compare across the whole video (legacy)." },
         { name: "move_to_rejected", type: "boolean", placeholder: "true",

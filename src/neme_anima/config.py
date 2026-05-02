@@ -96,8 +96,15 @@ class DedupConfig:
     fps, the default 1000 covers ~40 seconds, comfortably wider than
     a typical anime shot. Set to 0 to compare across the whole video
     (legacy behaviour, useful for very short clips).
+
+    ``distance_threshold`` defaults to 0.02 — strict enough that only
+    crops which are essentially the same image collapse together. The
+    looser 0.05 default used previously also caught near-duplicates
+    of different poses inside the same shot, which the windowed pass
+    can now afford to leave in place since it never compares across
+    distant cuts anyway.
     """
-    distance_threshold: float = 0.05  # CCIP distance below this = duplicate
+    distance_threshold: float = 0.02  # CCIP distance below this = duplicate
     lookback_frames: int = 1000       # max frame_idx delta; 0 = unlimited
     move_to_rejected: bool = True     # False = delete; True = move to rejected/
 

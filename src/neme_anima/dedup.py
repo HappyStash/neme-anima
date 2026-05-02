@@ -10,7 +10,7 @@ for identification, no new model — and moving the lower-scoring members of
 each near-duplicate group to ``rejected/`` so the user can recover them if
 the threshold was wrong.
 
-Off by default. Default distance threshold (0.05) is well below the
+Off by default. Default distance threshold (0.02) is well below the
 identification floor (0.15 strict / 0.20 loose), so it only collapses crops
 that are essentially the same image — not different poses of the same
 character.
