@@ -1069,10 +1069,13 @@
                 </div>
               {/if}
               {#if coreTagsReport.blacklisted.length > 0}
-                <div class="text-[10px] text-slate-500 mt-2">
-                  Filtered as common danbooru meta tags
-                  ({coreTagsReport.blacklisted.length}):
+                <div
+                  class="text-[10px] text-slate-500 mt-2"
+                  title="These tags crossed the threshold but are pose/composition meta-tags shared across characters. They're kept in the training captions on purpose — pruning them would weaken the model's general vocabulary. The blacklist lives in core_tags.py."
+                >
+                  Excluded from suggestions ({coreTagsReport.blacklisted.length}):
                   <span class="text-slate-400 font-mono">{coreTagsReport.blacklisted.join(", ")}</span>
+                  — kept in training captions on purpose.
                 </div>
               {/if}
             </div>
