@@ -480,17 +480,16 @@ def _build_trigger_map(project: Project) -> dict[str, str]:
 def _prepend_trigger(sidecar_text: str, trigger: str) -> str:
     """Return a new sidecar with ``trigger, `` prepended to line 1.
 
-    Line 2 (LLM description) is untouched. We never double-prepend — the
-    on-disk source sidecar is the input and is the authoritative untriggered
-    text; staging is rewritten on every run from that source.
+    Line 2 (LLM description) is untouched. Pass through ``split_sidecar``
+    / ``join_sidecar`` so the staged file's trailing-newline + CRLF + tag
+    dedup behaviour matches the rest of the pipeline (mirrors
+    ``core_tags.prune_sidecar_text``).
     """
-    parts = sidecar_text.split("\n", 1)
-    danbooru = parts[0]
-    rest = parts[1] if len(parts) > 1 else ""
-    new_danbooru = f"{trigger}, {danbooru}".rstrip(", ").strip()
-    if rest:
-        return f"{new_danbooru}\n{rest}"
-    return new_danbooru
+    from neme_anima.tag import join_sidecar, split_sidecar
+
+    danbooru, description = split_sidecar(sidecar_text)
+    triggered = f"{trigger}, {danbooru}" if danbooru else trigger
+    return join_sidecar(triggered, description)
 
 
 def _link_or_copy(src: Path, dest: Path) -> None:

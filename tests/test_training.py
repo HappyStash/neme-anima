@@ -467,6 +467,8 @@ def test_build_dataset_staging_prepends_trigger_token(tmp_path):
     # On-disk source untouched.
     src = (p.kept_dir / f"{fname}.txt").read_text(encoding="utf-8")
     assert src.startswith("tag1, tag2"), src
+    # Sidecar shape: trailing newline preserved (POSIX-friendly diffs).
+    assert staged.endswith("\n"), staged
 
 
 def test_build_dataset_staging_prunes_then_prepends_trigger(tmp_path):
