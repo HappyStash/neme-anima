@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -48,3 +51,59 @@ def test_project_create_rejects_existing(tmp_path: Path):
     target.mkdir()
     result = runner.invoke(app, ["project", "create", str(target), "--name", "x"])
     assert result.exit_code != 0
+
+
+def _seed_src_with_character(src_root: Path) -> None:
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.storage.project import Project
+
+    p = Project.create(src_root, name="src")
+    p.add_character(name="Sora", slug="sora")
+    (p.kept_dir / "ep01__a.png").write_bytes(b"\x89PNG")
+    MetadataLog(p.metadata_path).append(FrameRecord(
+        filename="ep01__a", kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="ep01", character_slug="sora",
+    ))
+
+
+def test_character_copy_cli(tmp_path):
+    from neme_anima.storage.project import Project
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    _seed_src_with_character(src)
+    Project.create(dst, name="dst")
+
+    res = subprocess.run(
+        [sys.executable, "-m", "neme_anima.cli",
+         "character", "copy", str(src), "sora", str(dst)],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, (res.stdout + res.stderr)
+    payload = json.loads(res.stdout)
+    assert payload["character_slug"] == "sora"
+    assert "ep01__a" in payload["frames_added"]
+
+    dst_proj = Project.load(dst)
+    assert dst_proj.character_by_slug("sora") is not None
+
+
+def test_character_copy_cli_dry_run(tmp_path):
+    from neme_anima.storage.project import Project
+
+    src = tmp_path / "src"
+    dst = tmp_path / "dst"
+    _seed_src_with_character(src)
+    Project.create(dst, name="dst")
+
+    res = subprocess.run(
+        [sys.executable, "-m", "neme_anima.cli",
+         "character", "copy", str(src), "sora", str(dst), "--dry-run"],
+        capture_output=True, text=True,
+    )
+    assert res.returncode == 0, (res.stdout + res.stderr)
+    payload = json.loads(res.stdout)
+    assert payload["dry_run"] is True
+    assert Project.load(dst).character_by_slug("sora") is None

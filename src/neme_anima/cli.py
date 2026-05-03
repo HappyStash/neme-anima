@@ -17,7 +17,45 @@ app = typer.Typer(
 )
 project_app = typer.Typer(name="project", help="Manage projects (sources, refs, runs).")
 app.add_typer(project_app, name="project")
+character_app = typer.Typer(
+    name="character", help="Per-character operations.",
+)
+app.add_typer(character_app, name="character")
 console = Console()
+
+
+@character_app.command("copy")
+def character_copy(
+    src_folder: Path = typer.Argument(..., exists=True, file_okay=False,
+                                      help="Source project folder."),
+    character_slug: str = typer.Argument(..., help="Slug to copy."),
+    dst_folder: Path = typer.Argument(..., exists=True, file_okay=False,
+                                      help="Destination project folder."),
+    dry_run: bool = typer.Option(False, "--dry-run",
+                                 help="Don't write; just report."),
+) -> None:
+    """Copy a character (refs, sources, frames, sidecars, crops, identity)
+    from one project to another. On per-object collisions in the destination,
+    the imported object is dropped — see CopyReport for what was added vs
+    skipped. Output is JSON on stdout."""
+    import json as _json
+
+    from neme_anima.storage.character_copy import copy_character_to_project
+
+    src = Project.load(src_folder)
+    dst = Project.load(dst_folder)
+    try:
+        report = copy_character_to_project(
+            src=src, src_character_slug=character_slug,
+            dst=dst, dry_run=dry_run,
+        )
+    except KeyError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(code=2) from e
+    except ValueError as e:
+        console.print(f"[red]error:[/red] {e}")
+        raise typer.Exit(code=3) from e
+    print(_json.dumps(report.to_dict(), indent=2))
 
 
 @project_app.command("create")
