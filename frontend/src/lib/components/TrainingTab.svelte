@@ -972,7 +972,7 @@
 
         <div
           class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3"
-          title="Tags that show up on most of this character's frames (hair color, eye color, default outfit, …). When 'Prune core tags at staging' is on, they're stripped from every caption right before training — the LoRA learns them visually, so leaving them in only adds noise. Click 'Compute suggestions' to surface candidates ranked by frequency, then click each tag to add or remove it from the persisted list."
+          title="Tags that show up on most of this character's frames (hair color, eye color, default outfit, …). When 'Prune core tags at staging' is on, the Selected tags are stripped from every caption right before training — the LoRA learns them visually, so leaving them in only adds noise. Click 'Compute suggestions' to surface candidates ranked by frequency, then click each tag to add or remove it from the Selected list."
         >
           <h3 class="text-sm font-medium text-slate-200 mb-3 flex items-center gap-1">
             <span>Core tags</span>
@@ -1023,7 +1023,8 @@
           {#if identityChar.core_tags.length > 0}
             <div class="mb-3">
               <span class="text-[10px] uppercase tracking-wide text-slate-500">
-                Persisted ({identityChar.core_tags.length})
+                Selected ({identityChar.core_tags.length}) — stripped from
+                this character's training captions when pruning is on
               </span>
               <div class="flex flex-wrap gap-1 mt-1">
                 {#each identityChar.core_tags as t (t)}
@@ -1031,7 +1032,7 @@
                     type="button"
                     onclick={() => toggleCoreTag(t)}
                     class="px-2 py-0.5 text-[11px] rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/30"
-                    title="Click to remove from the persisted list"
+                    title="Click to remove from the selected list"
                   >{t} ✕</button>
                 {/each}
               </div>
@@ -1055,7 +1056,7 @@
                         {persisted
                           ? 'bg-emerald-500/15 text-emerald-300'
                           : 'bg-ink-800 text-slate-400 hover:bg-ink-700'}"
-                      title="Click to {persisted ? 'remove from' : 'add to'} the persisted list"
+                      title="Click to {persisted ? 'remove from' : 'add to'} the selected list"
                     >{row.tag} <span class="text-slate-500">{(row.freq * 100).toFixed(0)}%</span></button>
                   {/each}
                 </div>
