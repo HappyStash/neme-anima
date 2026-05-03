@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount, onDestroy } from "svelte";
   import * as api from "$lib/api";
+  import { colorForIndex } from "$lib/characterColors";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { trainingStore } from "$lib/stores/training.svelte";
   import type { TrainingConfig, TrainingPathCheck, TrainingRun } from "$lib/types";
@@ -920,17 +921,25 @@
       <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
         <h3 class="text-sm font-medium text-slate-200 mb-3">Character</h3>
         <div class="flex flex-wrap gap-2">
-          {#each project?.characters ?? [] as c (c.slug)}
+          {#each project?.characters ?? [] as c, i (c.slug)}
+            {@const active = identitySlug === c.slug}
+            {@const color = colorForIndex(i)}
             <button
               type="button"
               onclick={() => (identitySlug = c.slug)}
-              class="px-3 py-1 rounded-full text-xs border transition-colors
-                {identitySlug === c.slug
-                  ? 'border-accent-500 bg-accent-500/10 text-slate-100'
-                  : 'border-ink-700 text-slate-400 hover:text-slate-200'}"
+              class="h-7 px-3 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors
+                {active
+                  ? `${color.bgActive} ${color.borderActive} border text-white`
+                  : 'bg-ink-900 border border-ink-700 text-slate-300 hover:bg-ink-800 hover:text-slate-100'}"
+              style={active ? `box-shadow: 0 2px 8px ${color.glow}` : undefined}
             >
-              {c.name}
-              <span class="text-slate-500 tabular-nums ml-1">({c.ref_count})</span>
+              <span
+                class="w-2 h-2 rounded-full flex-shrink-0
+                  {active ? 'bg-white/70' : color.dot}"
+                aria-hidden="true"
+              ></span>
+              <span>{c.name}</span>
+              <span class="opacity-70 tabular-nums">({c.ref_count})</span>
             </button>
           {/each}
         </div>
