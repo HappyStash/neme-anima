@@ -1042,22 +1042,38 @@
             <div>
               <span class="text-[10px] uppercase tracking-wide text-slate-500">
                 Suggestions (corpus={coreTagsReport.corpus_size},
-                threshold={coreTagsReport.threshold})
+                threshold={(coreTagsReport.threshold * 100).toFixed(0)}%)
               </span>
-              <div class="flex flex-wrap gap-1 mt-1">
-                {#each coreTagsReport.tags as row (row.tag)}
-                  {@const persisted = identityChar.core_tags.includes(row.tag)}
-                  <button
-                    type="button"
-                    onclick={() => toggleCoreTag(row.tag)}
-                    class="px-2 py-0.5 text-[11px] rounded
-                      {persisted
-                        ? 'bg-emerald-500/15 text-emerald-300'
-                        : 'bg-ink-800 text-slate-400 hover:bg-ink-700'}"
-                    title="Click to {persisted ? 'remove from' : 'add to'} the persisted list"
-                  >{row.tag} <span class="text-slate-500">{(row.freq * 100).toFixed(0)}%</span></button>
-                {/each}
-              </div>
+              {#if coreTagsReport.tags.length > 0}
+                <div class="flex flex-wrap gap-1 mt-1">
+                  {#each coreTagsReport.tags as row (row.tag)}
+                    {@const persisted = identityChar.core_tags.includes(row.tag)}
+                    <button
+                      type="button"
+                      onclick={() => toggleCoreTag(row.tag)}
+                      class="px-2 py-0.5 text-[11px] rounded
+                        {persisted
+                          ? 'bg-emerald-500/15 text-emerald-300'
+                          : 'bg-ink-800 text-slate-400 hover:bg-ink-700'}"
+                      title="Click to {persisted ? 'remove from' : 'add to'} the persisted list"
+                    >{row.tag} <span class="text-slate-500">{(row.freq * 100).toFixed(0)}%</span></button>
+                  {/each}
+                </div>
+              {:else}
+                <div class="text-[11px] text-slate-400 mt-1">
+                  No tag appeared in at least
+                  {(coreTagsReport.threshold * 100).toFixed(0)}% of this
+                  character's {coreTagsReport.corpus_size} frame{coreTagsReport.corpus_size === 1 ? "" : "s"}.
+                  Lower the threshold to surface less-frequent tags.
+                </div>
+              {/if}
+              {#if coreTagsReport.blacklisted.length > 0}
+                <div class="text-[10px] text-slate-500 mt-2">
+                  Filtered as common danbooru meta tags
+                  ({coreTagsReport.blacklisted.length}):
+                  <span class="text-slate-400 font-mono">{coreTagsReport.blacklisted.join(", ")}</span>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -1085,10 +1101,6 @@
               }}
               class="w-32 mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded font-mono"
             />
-            <span class="block text-[10px] text-slate-500 mt-1">
-              Per-character training-set repeat. Set to 0 to let the balancing
-              pass equalise each character's exposure based on relative frame counts.
-            </span>
           </label>
         </div>
       {/if}
