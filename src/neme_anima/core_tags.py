@@ -84,11 +84,18 @@ def _parse_tags(tag_text: str) -> list[str]:
 def _filenames_for_character(
     project: Project, character_slug: str,
 ) -> list[str]:
-    """Return the kept filenames currently routed to ``character_slug``.
+    """Return the kept filenames currently routed to ``character_slug``
+    AND still present on disk.
 
-    Iterates the metadata log and applies last-write-wins per filename so
-    a frame moved to a different character via the bulk-move endpoint is
-    counted under its new owner only.
+    The metadata log is append-only; ``delete_frame`` removes the .png/.txt
+    on disk but leaves the historical row. Without the on-disk filter the
+    corpus_size denominator would include phantom rows for deleted frames,
+    crushing every tag's frequency below the threshold and producing an
+    empty suggestions list. Mirrors ``list_frames``' "metadata + on-disk"
+    intersection so the user sees the same set the UI shows.
+
+    Last-write-wins per filename so a frame moved to a different character
+    via the bulk-move endpoint is counted under its new owner only.
     """
     log = MetadataLog(project.metadata_path)
     by_name: dict[str, str] = {}
@@ -96,7 +103,11 @@ def _filenames_for_character(
         if not rec.kept:
             continue
         by_name[rec.filename] = rec.character_slug
-    return [fn for fn, slug in by_name.items() if slug == character_slug]
+    return [
+        fn for fn, slug in by_name.items()
+        if slug == character_slug
+        and (project.kept_dir / f"{fn}.png").is_file()
+    ]
 
 
 def compute_core_tags(

@@ -232,3 +232,41 @@ def test_core_tags_for_filename_unknown_filename_returns_none(tmp_path: Path):
     project = Project.create(tmp_path / "p", name="show")
     out = core_tags_for_filename(project, "ghost_frame")
     assert out is None
+
+
+def test_compute_core_tags_ignores_deleted_frames(tmp_path: Path):
+    """Frames whose .png has been removed from disk (e.g. via the Frames
+    tab's delete) must NOT count toward ``corpus_size``. The metadata log
+    is append-only, so a stale row for a deleted frame would otherwise
+    inflate the denominator and crush every surviving tag below the
+    threshold (the bug the user hit: 15 curated frames showing
+    corpus=275)."""
+    project = Project.create(tmp_path / "p", name="show")
+    # Seed 3 surviving frames with "blue_eyes" in all of them (100 %).
+    for i in range(3):
+        _seed_kept_frame(
+            project, filename=f"ep01__keep_{i}",
+            character_slug=DEFAULT_CHARACTER_SLUG,
+            tags="blue_eyes, brown_hair",
+        )
+    # Seed 17 metadata rows for frames whose .png has been deleted from
+    # disk: the metadata stays but the file is gone. Without the on-disk
+    # filter, corpus_size would be 20 → "blue_eyes" frequency = 3/20 = 15 %
+    # → below the default 35 % threshold → empty suggestions.
+    for i in range(17):
+        MetadataLog(project.metadata_path).append(FrameRecord(
+            filename=f"ep01__deleted_{i}", kept=True,
+            scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+            ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+            score=0.9, video_stem="ep01", character_slug=DEFAULT_CHARACTER_SLUG,
+        ))
+
+    report = compute_core_tags(
+        project=project, character_slug=DEFAULT_CHARACTER_SLUG,
+        threshold=0.35,
+    )
+    assert report.corpus_size == 3, report.corpus_size
+    tag_names = [t for t, _ in report.tags]
+    assert "blue_eyes" in tag_names
+    assert "brown_hair" in tag_names
