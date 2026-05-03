@@ -98,6 +98,10 @@ def _project_view(project: Project) -> dict:
                 "trigger_token": c.trigger_token,
                 "refs": [asdict(r) for r in c.refs],
                 "ref_count": len(c.refs),
+                "core_tags": list(c.core_tags),
+                "core_tags_freq_threshold": c.core_tags_freq_threshold,
+                "core_tags_enabled": c.core_tags_enabled,
+                "multiply": c.multiply,
             }
             for c in project.characters
         ],
