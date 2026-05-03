@@ -152,3 +152,47 @@ def test_clean_copy_moves_everything(tmp_path):
     assert report.frames_skipped == []
     assert report.metadata_rows_appended == 2
     assert report.dry_run is False
+
+
+def test_source_video_collision_skips_source_keeps_frames(tmp_path):
+    """When dst already has the source video at the same abs path, the
+    source record is not duplicated. Frames are still imported (their
+    individual filename collision rule applies separately)."""
+    # Both projects reference the same video file on disk.
+    shared_video = tmp_path / "ep01.mp4"
+    shared_video.write_bytes(b"\x00")
+
+    src = _make_project(tmp_path / "src", "src")
+    src.add_source(shared_video)
+    src_log = MetadataLog(src.metadata_path)
+    (src.kept_dir / "ep01__a.png").write_bytes(b"\x89PNG")
+    src_log.append(FrameRecord(
+        filename="ep01__a", kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="ep01", character_slug="default",
+    ))
+    src.add_character(name="Sora", slug="sora")
+    # Move the frame to "sora" so the metadata reflects ownership.
+    src_log.append(FrameRecord(
+        filename="ep01__a", kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="ep01", character_slug="sora",
+    ))
+
+    dst = _make_project(tmp_path / "dst", "dst")
+    dst.add_source(shared_video)  # same abs path → collision
+
+    report = copy_character_to_project(
+        src=src, src_character_slug="sora", dst=dst,
+    )
+
+    dst = Project.load(dst.root)
+    # Only one source record in dst.
+    assert len(dst.sources) == 1
+    assert report.sources_skipped == [str(shared_video.resolve())]
+    assert report.sources_added == []
+    # Frame was still copied (no per-frame collision).
+    assert (dst.kept_dir / "ep01__a.png").is_file()
+    assert "ep01__a" in report.frames_added
