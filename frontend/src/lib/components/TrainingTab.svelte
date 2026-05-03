@@ -192,6 +192,37 @@
     }, 350);
   }
 
+  let coreTagsReport = $state<api.CoreTagsReport | null>(null);
+  let coreTagsLoading = $state(false);
+
+  async function runCoreTagsCompute() {
+    if (!project || !identityChar) return;
+    coreTagsLoading = true;
+    try {
+      coreTagsReport = await api.computeCharacterCoreTags(
+        project.slug, identityChar.slug,
+      );
+    } finally {
+      coreTagsLoading = false;
+    }
+  }
+
+  function toggleCoreTag(tag: string) {
+    if (!project || !identityChar) return;
+    const cur = new Set(identityChar.core_tags);
+    if (cur.has(tag)) cur.delete(tag);
+    else cur.add(tag);
+    saveIdentityField(project.slug, identityChar.slug, {
+      core_tags: [...cur],
+    });
+  }
+
+  // Reset the report when switching characters so we don't show stale tags.
+  $effect(() => {
+    identitySlug;  // dep
+    coreTagsReport = null;
+  });
+
   async function copyPath(path: string) {
     try {
       await navigator.clipboard.writeText(path);
@@ -928,6 +959,92 @@
                 : "Empty — captions go to the trainer unchanged."}
             </span>
           </label>
+        </div>
+
+        <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+          <h3 class="text-sm font-medium text-slate-200 mb-3">Core tags</h3>
+
+          <div class="flex flex-wrap items-center gap-3 mb-3">
+            <label class="inline-flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={identityChar.core_tags_enabled}
+                onchange={(e) => {
+                  const v = (e.target as HTMLInputElement).checked;
+                  if (project) saveIdentityField(project.slug, identityChar!.slug, {
+                    core_tags_enabled: v,
+                  });
+                }}
+                class="w-4 h-4 rounded bg-ink-950 border-ink-700 accent-accent-500"
+              />
+              <span class="text-slate-300">Prune core tags at staging</span>
+            </label>
+
+            <label class="inline-flex items-center gap-2 text-xs">
+              <span class="text-[10px] uppercase tracking-wide text-slate-500">
+                threshold
+              </span>
+              <input
+                type="number" min="0.01" max="1.0" step="0.01"
+                value={identityChar.core_tags_freq_threshold}
+                onchange={(e) => {
+                  const v = Number((e.target as HTMLInputElement).value);
+                  if (project) saveIdentityField(project.slug, identityChar!.slug, {
+                    core_tags_freq_threshold: v,
+                  });
+                }}
+                class="w-20 px-2 py-1 bg-ink-950 border border-ink-700 rounded font-mono"
+              />
+            </label>
+
+            <button
+              type="button"
+              onclick={runCoreTagsCompute}
+              disabled={coreTagsLoading}
+              class="px-3 py-1 text-xs rounded bg-ink-800 border border-ink-700 text-slate-300 hover:bg-ink-700 disabled:opacity-40"
+            >{coreTagsLoading ? "Computing…" : "Compute suggestions"}</button>
+          </div>
+
+          {#if identityChar.core_tags.length > 0}
+            <div class="mb-3">
+              <span class="text-[10px] uppercase tracking-wide text-slate-500">
+                Persisted ({identityChar.core_tags.length})
+              </span>
+              <div class="flex flex-wrap gap-1 mt-1">
+                {#each identityChar.core_tags as t (t)}
+                  <button
+                    type="button"
+                    onclick={() => toggleCoreTag(t)}
+                    class="px-2 py-0.5 text-[11px] rounded bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/30"
+                    title="Click to remove from the persisted list"
+                  >{t} ✕</button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+
+          {#if coreTagsReport}
+            <div>
+              <span class="text-[10px] uppercase tracking-wide text-slate-500">
+                Suggestions (corpus={coreTagsReport.corpus_size},
+                threshold={coreTagsReport.threshold})
+              </span>
+              <div class="flex flex-wrap gap-1 mt-1">
+                {#each coreTagsReport.tags as row (row.tag)}
+                  {@const persisted = identityChar.core_tags.includes(row.tag)}
+                  <button
+                    type="button"
+                    onclick={() => toggleCoreTag(row.tag)}
+                    class="px-2 py-0.5 text-[11px] rounded
+                      {persisted
+                        ? 'bg-emerald-500/15 text-emerald-300'
+                        : 'bg-ink-800 text-slate-400 hover:bg-ink-700'}"
+                    title="Click to {persisted ? 'remove from' : 'add to'} the persisted list"
+                  >{row.tag} <span class="text-slate-500">{(row.freq * 100).toFixed(0)}%</span></button>
+                {/each}
+              </div>
+            </div>
+          {/if}
         </div>
       {/if}
 
