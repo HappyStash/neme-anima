@@ -1046,6 +1046,30 @@
             </div>
           {/if}
         </div>
+
+        <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+          <h3 class="text-sm font-medium text-slate-200 mb-3">Repeat multiplier</h3>
+          <label class="block text-xs">
+            <span class="text-[10px] uppercase tracking-wide text-slate-500">
+              multiply (0.0 = auto-balance from frame counts)
+            </span>
+            <input
+              type="number" min="0" step="0.1"
+              value={identityChar.multiply}
+              onchange={(e) => {
+                const v = Number((e.target as HTMLInputElement).value);
+                if (project) saveIdentityField(project.slug, identityChar!.slug, {
+                  multiply: v,
+                });
+              }}
+              class="w-32 mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded font-mono"
+            />
+            <span class="block text-[10px] text-slate-500 mt-1">
+              Per-character training-set repeat. Set to 0 to let the balancing
+              pass equalise each character's exposure based on relative frame counts.
+            </span>
+          </label>
+        </div>
       {/if}
 
     {:else if subtab === "settings"}
