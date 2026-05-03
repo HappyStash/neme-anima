@@ -235,3 +235,70 @@ def test_ref_filename_collision_auto_renames(tmp_path):
     # Report.
     assert report.refs_renamed == {"portrait.png": "portrait-2.png"}
     assert report.refs_added == ["portrait-2.png"]
+
+
+def test_frame_filename_collision_drops_frame(tmp_path):
+    """When dst already has a kept/<filename>.png, the imported frame is
+    dropped — no PNG/sidecar/crop overwrite, no metadata row, frame name
+    in report.frames_skipped."""
+    src = _make_project(tmp_path / "src", "src")
+    _seed_character(
+        src, name="Sora", slug="sora",
+        frames=[
+            ("ep01__a", "ep01", "src-a-tags\n"),
+            ("ep01__b", "ep01", "src-b-tags\n"),
+        ],
+    )
+
+    dst = _make_project(tmp_path / "dst", "dst")
+    # Pre-existing colliding frame in dst.
+    (dst.kept_dir / "ep01__a.png").write_bytes(b"\x89PNG-DST")
+    (dst.kept_dir / "ep01__a.txt").write_text("dst-a-tags\n", encoding="utf-8")
+
+    report = copy_character_to_project(
+        src=src, src_character_slug="sora", dst=dst,
+    )
+
+    # Pre-existing PNG/sidecar untouched.
+    assert (dst.kept_dir / "ep01__a.png").read_bytes() == b"\x89PNG-DST"
+    assert (dst.kept_dir / "ep01__a.txt").read_text() == "dst-a-tags\n"
+    # Non-colliding frame copied.
+    assert (dst.kept_dir / "ep01__b.png").is_file()
+    # Report.
+    assert "ep01__a" in report.frames_skipped
+    assert "ep01__b" in report.frames_added
+
+    # No metadata row appended for the dropped frame.
+    rows = list(MetadataLog(Project.load(dst.root).metadata_path).iter_records(
+        character_slug="sora",
+    ))
+    assert {r.filename for r in rows} == {"ep01__b"}
+
+
+def test_custom_uploads_travel_without_source_video(tmp_path):
+    """custom_uploads frames are imported (PNG + sidecar + metadata row),
+    but no Source record is created in dst."""
+    src = _make_project(tmp_path / "src", "src")
+    src.add_character(name="Sora", slug="sora")
+    log = MetadataLog(src.metadata_path)
+    fname = "custom_uploads__ab12cd34"
+    (src.kept_dir / f"{fname}.png").write_bytes(b"\x89PNG-CU")
+    (src.kept_dir / f"{fname}.txt").write_text("cu-tags\n", encoding="utf-8")
+    log.append(FrameRecord(
+        filename=fname, kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="custom_uploads", character_slug="sora",
+    ))
+
+    dst = _make_project(tmp_path / "dst", "dst")
+    report = copy_character_to_project(
+        src=src, src_character_slug="sora", dst=dst,
+    )
+
+    dst = Project.load(dst.root)
+    assert (dst.kept_dir / f"{fname}.png").is_file()
+    assert (dst.kept_dir / f"{fname}.txt").read_text() == "cu-tags\n"
+    assert dst.sources == []
+    assert report.custom_uploads_added == 1
+    assert fname in report.frames_added
