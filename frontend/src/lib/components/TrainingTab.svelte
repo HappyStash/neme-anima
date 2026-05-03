@@ -1528,21 +1528,19 @@
               class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded font-mono"
             />
           </label>
-          <label
-            class="block"
-            title="A unique word prepended to every caption so you can summon the LoRA at inference time (e.g. 'mychar style, ...'). Use a rare/made-up token so it doesn't collide with the base model's vocabulary. Leave blank to skip."
+          <div
+            class="block text-xs col-span-2 md:col-span-1"
+            title="trigger_token is now per-character — edit it under Training → Identity."
           >
-            <span class="flex items-center gap-1 text-[10px] uppercase tracking-wide text-slate-500">
-              <span>trigger_token (optional)</span>
-              <span aria-hidden="true" class="text-slate-600 cursor-help">ⓘ</span>
+            <span class="text-[10px] uppercase tracking-wide text-slate-500">
+              trigger_token
             </span>
-            <input
-              value={cfg.trigger_token}
-              onchange={(e) => patchField("trigger_token", (e.target as HTMLInputElement).value)}
-              placeholder="e.g. mychar"
-              class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded font-mono"
-            />
-          </label>
+            <button
+              type="button"
+              onclick={() => (subtab = "identity")}
+              class="block w-full mt-1 px-3 py-1.5 bg-ink-950 border border-dashed border-ink-700 rounded text-slate-400 text-left hover:border-accent-500 hover:text-slate-200"
+            >Edit per character → Identity tab</button>
+          </div>
         </div>
       </div>
 
