@@ -174,6 +174,24 @@
     (project?.characters ?? []).find(c => c.slug === identitySlug) ?? null,
   );
 
+  let identitySaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function saveIdentityField(
+    slug: string,
+    characterSlug: string,
+    patch: Parameters<typeof api.updateCharacter>[2],
+  ) {
+    if (identitySaveTimer) clearTimeout(identitySaveTimer);
+    identitySaveTimer = setTimeout(async () => {
+      try {
+        await api.updateCharacter(slug, characterSlug, patch);
+        await projectsStore.load(slug);  // refresh in-memory view
+      } catch (e) {
+        console.error("identity save failed", e);
+      }
+    }, 350);
+  }
+
   async function copyPath(path: string) {
     try {
       await navigator.clipboard.writeText(path);
@@ -887,7 +905,30 @@
         </div>
       </div>
       {#if identityChar}
-        <!-- form cards added in Tasks 5-7 will go here -->
+        <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+          <h3 class="text-sm font-medium text-slate-200 mb-3">Trigger token</h3>
+          <label class="block text-xs">
+            <span class="text-[10px] uppercase tracking-wide text-slate-500">
+              trigger_token (optional)
+            </span>
+            <input
+              value={identityChar.trigger_token}
+              oninput={(e) => {
+                const v = (e.target as HTMLInputElement).value;
+                if (project) saveIdentityField(project.slug, identityChar!.slug, {
+                  trigger_token: v,
+                });
+              }}
+              placeholder="e.g. mychar"
+              class="w-full mt-1 px-3 py-1.5 bg-ink-950 border border-ink-700 rounded font-mono"
+            />
+            <span class="block text-[10px] text-slate-500 mt-1">
+              {identityChar.trigger_token
+                ? `Will be prepended to every caption: "${identityChar.trigger_token}, ..."`
+                : "Empty — captions go to the trainer unchanged."}
+            </span>
+          </label>
+        </div>
       {/if}
 
     {:else if subtab === "settings"}
