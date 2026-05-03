@@ -970,8 +970,14 @@
           </label>
         </div>
 
-        <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
-          <h3 class="text-sm font-medium text-slate-200 mb-3">Core tags</h3>
+        <div
+          class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3"
+          title="Tags that show up on most of this character's frames (hair color, eye color, default outfit, …). When 'Prune core tags at staging' is on, they're stripped from every caption right before training — the LoRA learns them visually, so leaving them in only adds noise. Click 'Compute suggestions' to surface candidates ranked by frequency, then click each tag to add or remove it from the persisted list."
+        >
+          <h3 class="text-sm font-medium text-slate-200 mb-3 flex items-center gap-1">
+            <span>Core tags</span>
+            <span aria-hidden="true" class="text-slate-600 cursor-help text-xs">ⓘ</span>
+          </h3>
 
           <div class="flex flex-wrap items-center gap-3 mb-3">
             <label class="inline-flex items-center gap-2 text-xs">
@@ -1056,8 +1062,14 @@
           {/if}
         </div>
 
-        <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
-          <h3 class="text-sm font-medium text-slate-200 mb-3">Repeat multiplier</h3>
+        <div
+          class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3"
+          title="Per-character training-set repeat multiplier — controls this character's exposure to the model in a multi-character run. 0.0 (auto) lets the balancing pass equalise relative frame counts so a 50-frame character isn't drowned out by a 500-frame one. A positive number pins the value manually (e.g. 2.0 means each of this character's frames is seen twice per epoch)."
+        >
+          <h3 class="text-sm font-medium text-slate-200 mb-3 flex items-center gap-1">
+            <span>Repeat multiplier</span>
+            <span aria-hidden="true" class="text-slate-600 cursor-help text-xs">ⓘ</span>
+          </h3>
           <label class="block text-xs">
             <span class="text-[10px] uppercase tracking-wide text-slate-500">
               multiply (0.0 = auto-balance from frame counts)
