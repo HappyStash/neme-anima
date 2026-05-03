@@ -209,3 +209,47 @@ async def delete_character(
     except ValueError as e:
         raise HTTPException(status_code=409, detail=str(e)) from e
     return Response(status_code=204)
+
+
+class CopyToBody(BaseModel):
+    destination_slug: str
+    dry_run: bool = False
+
+
+@router.post("/{slug}/characters/{character_slug}/copy-to")
+async def copy_to_project(
+    request: Request, slug: str, character_slug: str, body: CopyToBody,
+) -> dict:
+    """Copy this character (and all artifacts related to it) into another
+    registered project. See ``character_copy.copy_character_to_project``."""
+    from neme_anima.storage.character_copy import copy_character_to_project
+
+    src = _load(request, slug)
+    dst_entry = request.app.state.registry.get(body.destination_slug)
+    if dst_entry is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"unknown destination project: {body.destination_slug}",
+        )
+    try:
+        dst = Project.load(Path(dst_entry.folder))
+    except FileNotFoundError as e:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"destination project files missing for "
+                f"{body.destination_slug!r} at {dst_entry.folder}"
+            ),
+        ) from e
+    try:
+        report = copy_character_to_project(
+            src=src,
+            src_character_slug=character_slug,
+            dst=dst,
+            dry_run=body.dry_run,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail=str(e)) from e
+    except ValueError as e:
+        raise HTTPException(status_code=409, detail=str(e)) from e
+    return report.to_dict()
