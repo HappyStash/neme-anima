@@ -150,8 +150,29 @@
 
   // Sub-tab state. Persisted on the component, not the store, since the
   // user's choice is per-session.
-  type SubTab = "run" | "dataset" | "settings";
+  type SubTab = "run" | "dataset" | "settings" | "identity";
   let subtab = $state<SubTab>("run");
+
+  let project = $derived(projectsStore.active);
+  let identitySlug = $state<string | null>(null);
+
+  $effect(() => {
+    // Initialize/repair the picker selection when the project or its
+    // character list changes. Falls back to characters[0] when the current
+    // selection points at a character that's been deleted/renamed.
+    const chars = project?.characters ?? [];
+    if (chars.length === 0) {
+      identitySlug = null;
+      return;
+    }
+    if (!identitySlug || !chars.some(c => c.slug === identitySlug)) {
+      identitySlug = chars[0].slug;
+    }
+  });
+
+  let identityChar = $derived(
+    (project?.characters ?? []).find(c => c.slug === identitySlug) ?? null,
+  );
 
   async function copyPath(path: string) {
     try {
@@ -507,7 +528,7 @@
   {:else}
     <!-- ============ sub-tabs ============ -->
     <div class="flex gap-1 mb-3 border-b border-ink-800">
-      {#each [{ k: "run", label: "Run" }, { k: "dataset", label: "Dataset" }, { k: "settings", label: "Settings" }] as t}
+      {#each [{ k: "run", label: "Run" }, { k: "dataset", label: "Dataset" }, { k: "identity", label: "Identity" }, { k: "settings", label: "Settings" }] as t}
         <button
           type="button"
           onclick={() => (subtab = t.k as SubTab)}
@@ -844,6 +865,29 @@
         <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 text-sm text-slate-400">
           Loading dataset preview…
         </div>
+      {/if}
+
+    {:else if subtab === "identity"}
+      <div class="bg-ink-900 border border-ink-700 rounded-xl p-4 mb-3">
+        <h3 class="text-sm font-medium text-slate-200 mb-3">Character</h3>
+        <div class="flex flex-wrap gap-2">
+          {#each project?.characters ?? [] as c (c.slug)}
+            <button
+              type="button"
+              onclick={() => (identitySlug = c.slug)}
+              class="px-3 py-1 rounded-full text-xs border transition-colors
+                {identitySlug === c.slug
+                  ? 'border-accent-500 bg-accent-500/10 text-slate-100'
+                  : 'border-ink-700 text-slate-400 hover:text-slate-200'}"
+            >
+              {c.name}
+              <span class="text-slate-500 tabular-nums ml-1">({c.ref_count})</span>
+            </button>
+          {/each}
+        </div>
+      </div>
+      {#if identityChar}
+        <!-- form cards added in Tasks 5-7 will go here -->
       {/if}
 
     {:else if subtab === "settings"}
