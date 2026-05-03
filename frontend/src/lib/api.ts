@@ -221,6 +221,30 @@ export const computeCharacterCoreTags = (
     { method: "POST", body: JSON.stringify(body) },
   );
 
+export type CharacterCopyReport = {
+  character_slug: string;
+  sources_added: string[];
+  sources_skipped: string[];
+  refs_added: string[];
+  refs_renamed: Record<string, string>;
+  frames_added: string[];
+  frames_skipped: string[];
+  custom_uploads_added: number;
+  crops_copied: number;
+  metadata_rows_appended: number;
+  dry_run: boolean;
+};
+
+export const copyCharacterToProject = (
+  slug: string,
+  characterSlug: string,
+  body: { destination_slug: string; dry_run?: boolean },
+) =>
+  request<CharacterCopyReport>(
+    `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}/copy-to`,
+    { method: "POST", body: JSON.stringify(body) },
+  );
+
 export const deleteCharacter = (slug: string, characterSlug: string) =>
   request<void>(
     `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}`,
