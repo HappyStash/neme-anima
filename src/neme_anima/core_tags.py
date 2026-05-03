@@ -85,22 +85,32 @@ def _filenames_for_character(
     project: Project, character_slug: str,
 ) -> list[str]:
     """Return the kept filenames currently routed to ``character_slug``
-    AND still present on disk.
+    AND still present on disk, EXCLUDING crop derivatives.
 
-    The metadata log is append-only; ``delete_frame`` removes the .png/.txt
-    on disk but leaves the historical row. Without the on-disk filter the
-    corpus_size denominator would include phantom rows for deleted frames,
-    crushing every tag's frequency below the threshold and producing an
-    empty suggestions list. Mirrors ``list_frames``' "metadata + on-disk"
-    intersection so the user sees the same set the UI shows.
+    Three filters layered on the metadata-log walk:
 
-    Last-write-wins per filename so a frame moved to a different character
-    via the bulk-move endpoint is counted under its new owner only.
+    * **On-disk:** the metadata log is append-only; ``delete_frame``
+      removes the .png/.txt on disk but leaves the historical row.
+      Without this filter, deleted frames would inflate ``corpus_size``
+      and crush every tag's frequency below the threshold.
+    * **No crop derivatives:** ``crop_frame_endpoint`` writes
+      ``<original>_crop.png`` plus an extra metadata row, but the
+      ``.txt`` sidecar stays at ``<original>.txt`` (one sidecar per
+      logical frame). Counting the crop's row would inflate
+      ``corpus_size`` while contributing zero tags — the same kind of
+      empty-numerator/full-denominator bug as deleted frames.
+    * **Last-write-wins per filename** so a frame moved to a different
+      character via the bulk-move endpoint is counted under its new
+      owner only.
     """
+    from neme_anima.storage.project import CROP_SUFFIX
+
     log = MetadataLog(project.metadata_path)
     by_name: dict[str, str] = {}
     for rec in log.iter_records():
         if not rec.kept:
+            continue
+        if rec.filename.endswith(CROP_SUFFIX):
             continue
         by_name[rec.filename] = rec.character_slug
     return [

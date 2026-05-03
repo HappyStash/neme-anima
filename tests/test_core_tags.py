@@ -270,3 +270,44 @@ def test_compute_core_tags_ignores_deleted_frames(tmp_path: Path):
     tag_names = [t for t, _ in report.tags]
     assert "blue_eyes" in tag_names
     assert "brown_hair" in tag_names
+
+
+def test_compute_core_tags_excludes_crop_derivatives(tmp_path: Path):
+    """Crop derivatives (``<original>_crop.png``) get their own metadata
+    row but share the original's .txt sidecar. Counting them in
+    ``corpus_size`` would inflate the denominator with zero-tag
+    contribution and crush every surviving tag below the threshold.
+    Mirror the deleted-frame fix: exclude ``_crop`` rows."""
+    from neme_anima.storage.metadata import FrameRecord
+    from neme_anima.storage.project import CROP_SUFFIX
+
+    project = Project.create(tmp_path / "p", name="show")
+    # 4 originals, all with "blue_eyes".
+    for i in range(4):
+        _seed_kept_frame(
+            project, filename=f"ep01__a_{i}",
+            character_slug=DEFAULT_CHARACTER_SLUG,
+            tags="blue_eyes",
+        )
+    # 4 crop derivatives — png on disk + metadata row, but no separate
+    # sidecar. They must NOT count toward corpus_size.
+    for i in range(4):
+        crop_name = f"ep01__a_{i}{CROP_SUFFIX}"
+        Image.new("RGB", (8, 8), (5, 5, 5)).save(
+            project.kept_dir / f"{crop_name}.png",
+        )
+        MetadataLog(project.metadata_path).append(FrameRecord(
+            filename=crop_name, kept=True,
+            scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 8, 8),
+            ccip_distance=0.05, sharpness=1.0, visibility=1.0, aspect=1.0,
+            score=0.9, video_stem="ep01", character_slug=DEFAULT_CHARACTER_SLUG,
+        ))
+
+    report = compute_core_tags(
+        project=project, character_slug=DEFAULT_CHARACTER_SLUG,
+        threshold=0.35,
+    )
+    assert report.corpus_size == 4, report.corpus_size
+    tag_names = [t for t, _ in report.tags]
+    assert "blue_eyes" in tag_names
