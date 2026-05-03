@@ -10,7 +10,7 @@ from neme_anima.storage.character_copy import (
     CopyReport, copy_character_to_project,
 )
 from neme_anima.storage.metadata import FrameRecord, MetadataLog
-from neme_anima.storage.project import Character, Project
+from neme_anima.storage.project import Character, Project, RefImage
 
 
 def _make_project(root: Path, name: str) -> Project:
@@ -196,3 +196,42 @@ def test_source_video_collision_skips_source_keeps_frames(tmp_path):
     # Frame was still copied (no per-frame collision).
     assert (dst.kept_dir / "ep01__a.png").is_file()
     assert "ep01__a" in report.frames_added
+
+
+def test_ref_filename_collision_auto_renames(tmp_path):
+    """When dst already has a refs/<name> file, the imported ref is saved
+    under <name>-2.<ext> and the imported character points at the new path.
+    The pre-existing dst ref bytes are not modified."""
+    src = _make_project(tmp_path / "src", "src")
+    _seed_character(
+        src, name="Sora", slug="sora",
+        refs={"portrait.png": b"\x89PNG-NEW"},
+    )
+
+    dst = _make_project(tmp_path / "dst", "dst")
+    # Pre-seed dst with a ref under the same filename, owned by its
+    # default character. Different bytes so we can prove it survives.
+    (dst.root / "refs" / "portrait.png").write_bytes(b"\x89PNG-OLD")
+    dst.characters[0].refs.append(
+        RefImage(
+            path=str((dst.root / "refs" / "portrait.png").resolve()),
+            added_at="2026-01-01T00:00:00+00:00",
+        ),
+    )
+    dst.save()
+
+    report = copy_character_to_project(
+        src=src, src_character_slug="sora", dst=dst,
+    )
+
+    dst = Project.load(dst.root)
+    new_char = dst.character_by_slug("sora")
+    assert len(new_char.refs) == 1
+    new_ref_path = Path(new_char.refs[0].path)
+    assert new_ref_path.name == "portrait-2.png"
+    assert new_ref_path.read_bytes() == b"\x89PNG-NEW"
+    # Dst's pre-existing ref is untouched.
+    assert (dst.root / "refs" / "portrait.png").read_bytes() == b"\x89PNG-OLD"
+    # Report.
+    assert report.refs_renamed == {"portrait.png": "portrait-2.png"}
+    assert report.refs_added == ["portrait-2.png"]
