@@ -435,6 +435,110 @@ def test_build_dataset_staging_counts_missing_txt(
     assert info["missing_txt"] == 1
 
 
+def test_build_dataset_staging_prepends_trigger_token(tmp_path):
+    """Each character's trigger_token is prepended to the danbooru line of
+    its frames' staged sidecars. The on-disk source sidecar in kept/ is
+    untouched."""
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.training import build_dataset_staging
+
+    p = Project.create(tmp_path / "proj", name="proj")
+    p.characters[0].trigger_token = "mychar"
+    p.save()
+
+    # One kept frame for the default character.
+    fname = "vid__s0_t0_f0"
+    (p.kept_dir / f"{fname}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (p.kept_dir / f"{fname}.txt").write_text(
+        "tag1, tag2\na natural language description\n", encoding="utf-8",
+    )
+    MetadataLog(p.metadata_path).append(FrameRecord(
+        filename=fname, kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="vid", character_slug=p.characters[0].slug,
+    ))
+
+    dest = tmp_path / "stage"
+    build_dataset_staging(p, dest)
+
+    staged = (dest / f"{fname}.txt").read_text(encoding="utf-8")
+    assert staged.startswith("mychar, tag1, tag2"), staged
+    # On-disk source untouched.
+    src = (p.kept_dir / f"{fname}.txt").read_text(encoding="utf-8")
+    assert src.startswith("tag1, tag2"), src
+
+
+def test_build_dataset_staging_prunes_then_prepends_trigger(tmp_path):
+    """When both core_tags pruning and trigger_token are configured for a
+    character, pruning runs first, then the trigger is prepended. Order
+    matters: trigger must not be a candidate for pruning."""
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.training import build_dataset_staging
+
+    p = Project.create(tmp_path / "proj", name="proj")
+    c = p.characters[0]
+    c.trigger_token = "mychar"
+    c.core_tags = ["red eyes"]
+    c.core_tags_enabled = True
+    p.save()
+
+    fname = "vid__s0_t0_f0"
+    (p.kept_dir / f"{fname}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+    (p.kept_dir / f"{fname}.txt").write_text(
+        "red eyes, blue hair, smile\nbackground description\n",
+        encoding="utf-8",
+    )
+    MetadataLog(p.metadata_path).append(FrameRecord(
+        filename=fname, kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+        timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+        sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+        video_stem="vid", character_slug=c.slug,
+    ))
+
+    dest = tmp_path / "stage"
+    build_dataset_staging(p, dest)
+    staged = (dest / f"{fname}.txt").read_text(encoding="utf-8")
+    # red eyes pruned, then trigger prepended
+    assert staged.startswith("mychar, blue hair, smile"), staged
+    assert "red eyes" not in staged.split("\n", 1)[0]
+
+
+def test_build_dataset_staging_per_character_trigger(tmp_path):
+    """Two characters with distinct trigger_tokens — each character's
+    frames get only their own trigger."""
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.training import build_dataset_staging
+
+    p = Project.create(tmp_path / "proj", name="proj")
+    p.characters[0].trigger_token = "alpha"
+    p.add_character(name="Beta", slug="beta")
+    p.character_by_slug("beta").trigger_token = "beta"
+    p.save()
+
+    log = MetadataLog(p.metadata_path)
+    for slug in ("default", "beta"):
+        fn = f"vid__{slug}"
+        (p.kept_dir / f"{fn}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (p.kept_dir / f"{fn}.txt").write_text("tag\n", encoding="utf-8")
+        log.append(FrameRecord(
+            filename=fn, kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+            sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+            video_stem="vid", character_slug=slug,
+        ))
+
+    dest = tmp_path / "stage"
+    build_dataset_staging(p, dest)
+    # Multi-character mode → per-slug subdirs
+    a = (dest / "default" / "vid__default.txt").read_text(encoding="utf-8")
+    b = (dest / "beta" / "vid__beta.txt").read_text(encoding="utf-8")
+    assert a.startswith("alpha, tag"), a
+    assert b.startswith("beta, tag"), b
+    assert "beta" not in a.split("\n", 1)[0]
+    assert "alpha" not in b.split("\n", 1)[0]
+
+
 # ----- launcher argv --------------------------------------------------------
 
 

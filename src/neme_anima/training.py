@@ -334,6 +334,7 @@ def build_dataset_staging(project: Project, dest: Path) -> dict:
     # symlink-only path so single-character no-pruning runs are
     # byte-identical to the pre-core-tags pipeline.
     prune_map = _build_prune_map(project)
+    trigger_map = _build_trigger_map(project)
     pruned_count = 0
     # Per-character staging only kicks in for multi-character projects;
     # single-character projects keep the flat layout so existing callers
@@ -375,17 +376,16 @@ def build_dataset_staging(project: Project, dest: Path) -> dict:
         src_txt = kept / f"{stem}.txt"
         if src_txt.is_file():
             core_tags = prune_map.get(stem)
-            if core_tags:
-                # Write a pruned copy to the staging dir rather than
-                # symlinking — pruning is non-destructive (the original
-                # sidecar in kept/ stays as the ground truth) and
-                # restricted to staging output.
-                from neme_anima.core_tags import prune_sidecar_text
-                pruned = prune_sidecar_text(
-                    src_txt.read_text(encoding="utf-8"), core_tags,
-                )
-                (frame_dir / f"{stem}.txt").write_text(pruned, encoding="utf-8")
-                pruned_count += 1
+            trigger = trigger_map.get(stem)
+            if core_tags or trigger:
+                text = src_txt.read_text(encoding="utf-8")
+                if core_tags:
+                    from neme_anima.core_tags import prune_sidecar_text
+                    text = prune_sidecar_text(text, core_tags)
+                    pruned_count += 1
+                if trigger:
+                    text = _prepend_trigger(text, trigger)
+                (frame_dir / f"{stem}.txt").write_text(text, encoding="utf-8")
             else:
                 _link_or_copy(src_txt, frame_dir / f"{stem}.txt")
         else:
@@ -446,6 +446,51 @@ def _build_prune_map(project: Project) -> dict[str, list[str]]:
         if tags:
             out[filename] = tags
     return out
+
+
+def _build_trigger_map(project: Project) -> dict[str, str]:
+    """Return ``{filename: trigger_token}`` for kept frames whose owning
+    character has a non-empty ``trigger_token``.
+
+    Mirrors :func:`_build_prune_map`'s walk: last-write-wins per filename
+    so a moved frame is staged under its new owner's trigger. Frames whose
+    owners have an empty trigger are absent from the map — callers fall
+    through to the symlink path (no rewrite needed).
+    """
+    from neme_anima.storage.metadata import MetadataLog
+
+    log = MetadataLog(project.metadata_path)
+    latest_owner: dict[str, str] = {}
+    for rec in log.iter_records():
+        if rec.kept:
+            latest_owner[rec.filename] = rec.character_slug
+    triggers_by_slug = {
+        c.slug: c.trigger_token.strip()
+        for c in project.characters
+        if c.trigger_token.strip()
+    }
+    out: dict[str, str] = {}
+    for filename, slug in latest_owner.items():
+        t = triggers_by_slug.get(slug)
+        if t:
+            out[filename] = t
+    return out
+
+
+def _prepend_trigger(sidecar_text: str, trigger: str) -> str:
+    """Return a new sidecar with ``trigger, `` prepended to line 1.
+
+    Line 2 (LLM description) is untouched. We never double-prepend — the
+    on-disk source sidecar is the input and is the authoritative untriggered
+    text; staging is rewritten on every run from that source.
+    """
+    parts = sidecar_text.split("\n", 1)
+    danbooru = parts[0]
+    rest = parts[1] if len(parts) > 1 else ""
+    new_danbooru = f"{trigger}, {danbooru}".rstrip(", ").strip()
+    if rest:
+        return f"{new_danbooru}\n{rest}"
+    return new_danbooru
 
 
 def _link_or_copy(src: Path, dest: Path) -> None:
