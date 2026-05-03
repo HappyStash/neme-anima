@@ -3,6 +3,8 @@
   import { colorForIndex } from "$lib/characterColors";
   import { projectsStore } from "$lib/stores/projects.svelte";
   import { viewStore } from "$lib/stores/view.svelte";
+  import CopyCharacterModal from "./CopyCharacterModal.svelte";
+  import type { CharacterView } from "$lib/types";
 
   type Props = {
     /** When true, renders the "+ Add" button + per-chip × delete affordance.
@@ -28,6 +30,7 @@
   let creating = $state(false);
   let renaming = $state<string | null>(null);
   let nameDraft = $state("");
+  let copyTarget = $state<CharacterView | null>(null);
 
   let characters = $derived(projectsStore.active?.characters ?? []);
 
@@ -158,6 +161,19 @@
       {#if editable}
         <button
           type="button"
+          onclick={(e) => {
+            e.stopPropagation();
+            copyTarget = c;
+          }}
+          aria-label="Copy {c.name} to another project"
+          title="Copy this character to another project"
+          class="h-5 w-5 inline-flex items-center justify-center rounded-full
+            {active
+              ? 'opacity-70 hover:opacity-100 text-white'
+              : 'text-slate-500 hover:text-slate-200'}"
+        >⎘</button>
+        <button
+          type="button"
           onclick={() => deleteCharacter(c.slug, c.name)}
           aria-label="Delete {c.name}"
           title="Delete this character"
@@ -182,3 +198,11 @@
     >+ Add character</button>
   {/if}
 </div>
+
+{#if copyTarget && projectsStore.active}
+  <CopyCharacterModal
+    sourceSlug={projectsStore.active.slug}
+    character={copyTarget}
+    onclose={() => (copyTarget = null)}
+  />
+{/if}
