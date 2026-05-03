@@ -35,6 +35,10 @@ export interface CharacterView {
   trigger_token: string;
   refs: RefImage[];
   ref_count: number;
+  core_tags: string[];
+  core_tags_freq_threshold: number;
+  core_tags_enabled: boolean;
+  multiply: number;
 }
 
 export interface LLMConfig {

@@ -187,12 +187,38 @@ export const createCharacter = (
   );
 
 export const updateCharacter = (
-  slug: string, characterSlug: string,
-  body: { name?: string; trigger_token?: string },
+  slug: string,
+  characterSlug: string,
+  body: {
+    name?: string;
+    trigger_token?: string;
+    core_tags?: string[];
+    core_tags_freq_threshold?: number;
+    core_tags_enabled?: boolean;
+    multiply?: number;
+  },
 ) =>
   request<CharacterView>(
     `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}`,
     { method: "PATCH", body: JSON.stringify(body) },
+  );
+
+export type CoreTagsReport = {
+  character_slug: string;
+  corpus_size: number;
+  threshold: number;
+  tags: { tag: string; freq: number }[];
+  blacklisted: string[];
+};
+
+export const computeCharacterCoreTags = (
+  slug: string,
+  characterSlug: string,
+  body: { threshold?: number; blacklist?: string[] } = {},
+) =>
+  request<CoreTagsReport>(
+    `/api/projects/${encodeURIComponent(slug)}/characters/${encodeURIComponent(characterSlug)}/core-tags/compute`,
+    { method: "POST", body: JSON.stringify(body) },
   );
 
 export const deleteCharacter = (slug: string, characterSlug: string) =>
