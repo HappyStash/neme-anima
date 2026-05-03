@@ -541,6 +541,37 @@ def test_build_dataset_staging_per_character_trigger(tmp_path):
     assert "alpha" not in b.split("\n", 1)[0]
 
 
+def test_dataset_preview_uses_per_character_trigger(tmp_path):
+    """Two characters with distinct trigger tokens. dataset_preview's
+    samples must render each frame's caption with that frame's owning
+    character's trigger — not characters[0]'s for everyone."""
+    from neme_anima.storage.metadata import FrameRecord, MetadataLog
+    from neme_anima.training import dataset_preview
+
+    p = Project.create(tmp_path / "proj", name="proj")
+    p.characters[0].trigger_token = "alpha"
+    p.add_character(name="Beta", slug="beta")
+    p.character_by_slug("beta").trigger_token = "beta"
+    p.save()
+
+    log = MetadataLog(p.metadata_path)
+    for slug in ("default", "beta"):
+        fn = f"vid__{slug}"
+        (p.kept_dir / f"{fn}.png").write_bytes(b"\x89PNG\r\n\x1a\n")
+        (p.kept_dir / f"{fn}.txt").write_text("tag\n", encoding="utf-8")
+        log.append(FrameRecord(
+            filename=fn, kept=True, scene_idx=0, tracklet_id=0, frame_idx=0,
+            timestamp_seconds=0.0, bbox=(0, 0, 1, 1), ccip_distance=0.0,
+            sharpness=0.0, visibility=0.0, aspect=1.0, score=0.0,
+            video_stem="vid", character_slug=slug,
+        ))
+
+    preview = dataset_preview(p, sample_n=10)
+    by_filename = {s["filename"]: s for s in preview["samples"]}
+    assert by_filename["vid__default.png"]["rendered"].startswith("alpha,")
+    assert by_filename["vid__beta.png"]["rendered"].startswith("beta,")
+
+
 # ----- launcher argv --------------------------------------------------------
 
 

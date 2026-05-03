@@ -680,7 +680,13 @@ def render_training_caption(
 
 
 def dataset_preview(project: Project, *, sample_n: int = 5) -> dict:
-    """Summarize the project's training dataset for the UI."""
+    """Summarize the project's training dataset for the UI.
+
+    The ``samples`` block renders each frame's caption with that frame's
+    owning character's ``trigger_token`` so multi-character projects show
+    per-character previews. Project-level fields (``caption_mode``) come
+    from the project-wide config (still ``project.training``).
+    """
     cfg = project.training
     kept = project.kept_dir
     if not kept.is_dir():
@@ -700,6 +706,17 @@ def dataset_preview(project: Project, *, sample_n: int = 5) -> dict:
     total = len(images)
     with_tags = 0
     with_nl = 0
+
+    # Resolve each sampled frame to its owning character's trigger. Built
+    # once per call (O(metadata_rows + characters)).
+    owner_map = _build_owner_map(project)
+    triggers_by_slug = {
+        c.slug: c.trigger_token for c in project.characters
+    }
+    fallback_trigger = (
+        project.characters[0].trigger_token if project.characters else ""
+    )
+
     samples: list[dict] = []
     for i, img in enumerate(images):
         tags, nl = _read_sidecar(img)
@@ -708,11 +725,22 @@ def dataset_preview(project: Project, *, sample_n: int = 5) -> dict:
         if nl:
             with_nl += 1
         if i < sample_n:
+            slug = owner_map.get(img.stem)
+            trigger = (
+                triggers_by_slug.get(slug, fallback_trigger)
+                if slug is not None else fallback_trigger
+            )
+            sample_cfg = TrainingConfig(
+                caption_mode=cfg.caption_mode,
+                trigger_token=trigger,
+            )
             samples.append({
                 "filename": img.name,
                 "tags": tags,
                 "nl": nl,
-                "rendered": render_training_caption(tags=tags, nl=nl, config=cfg),
+                "rendered": render_training_caption(
+                    tags=tags, nl=nl, config=sample_cfg,
+                ),
             })
     return {
         "total_images": total,
