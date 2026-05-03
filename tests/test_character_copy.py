@@ -302,3 +302,43 @@ def test_custom_uploads_travel_without_source_video(tmp_path):
     assert dst.sources == []
     assert report.custom_uploads_added == 1
     assert fname in report.frames_added
+
+
+def test_dry_run_does_not_mutate_destination(tmp_path):
+    """dry_run=True returns the same report shape but writes nothing.
+    Destination's project.json + filesystem must be byte-identical
+    before/after."""
+    src = _make_project(tmp_path / "src", "src")
+    _seed_character(
+        src, name="Sora", slug="sora",
+        videos=["ep01"],
+        refs={"sora.png": b"\x89PNG-sora"},
+        frames=[("ep01__a", "ep01", "tag\n")],
+    )
+    dst = _make_project(tmp_path / "dst", "dst")
+
+    pre_json = (dst.root / "project.json").read_bytes()
+    pre_kept_files = {p.name: p.read_bytes() for p in dst.kept_dir.iterdir()}
+    pre_refs_files = {p.name: p.read_bytes() for p in (dst.root / "refs").iterdir()
+                       if p.is_file()}
+
+    report = copy_character_to_project(
+        src=src, src_character_slug="sora", dst=dst, dry_run=True,
+    )
+
+    post_json = (dst.root / "project.json").read_bytes()
+    post_kept_files = {p.name: p.read_bytes() for p in dst.kept_dir.iterdir()}
+    post_refs_files = {p.name: p.read_bytes() for p in (dst.root / "refs").iterdir()
+                        if p.is_file()}
+
+    assert pre_json == post_json
+    assert pre_kept_files == post_kept_files
+    assert pre_refs_files == post_refs_files
+
+    # Report still tells the truth about what would happen.
+    assert report.dry_run is True
+    assert report.character_slug == "sora"
+    assert len(report.sources_added) == 1
+    assert len(report.refs_added) == 1
+    assert len(report.frames_added) == 1
+    assert report.metadata_rows_appended == 0  # no rows actually written
