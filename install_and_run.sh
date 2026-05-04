@@ -176,6 +176,13 @@ if [[ -f requirements.txt ]]; then
 else
     warn "no requirements.txt found in $DIFFUSION_PIPE_DIR — skipping (upstream layout may have changed)"
 fi
+# torchvision is required by diffusion-pipe but omitted from some upstream
+# requirements.txt versions; install it explicitly to avoid import errors at
+# training time.
+if ! .venv/bin/python -c "import torchvision" 2>/dev/null; then
+    info "torchvision missing from diffusion-pipe venv — installing…"
+    uv pip install torchvision
+fi
 # deepspeed is the default launcher; verify it landed.
 if [[ ! -x .venv/bin/deepspeed ]] && [[ ! -x venv/bin/deepspeed ]]; then
     warn "deepspeed binary not found in the venv — training may fail to launch."
