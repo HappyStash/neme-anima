@@ -107,6 +107,7 @@ class DedupConfig:
     distance_threshold: float = 0.02  # CCIP distance below this = duplicate
     lookback_frames: int = 1000       # max frame_idx delta; 0 = unlimited
     move_to_rejected: bool = True     # False = delete; True = move to rejected/
+    embed_batch_size: int = 256       # crops per GPU forward pass during embedding
 
 
 @dataclass

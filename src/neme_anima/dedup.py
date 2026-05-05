@@ -244,12 +244,24 @@ def dedup_kept_for_video(
     from imgutils.metrics import ccip_batch_differences, ccip_batch_extract_features
     from PIL import Image
 
-    pil_imgs = [Image.open(p).convert("RGB") for p in pngs]
-    features = ccip_batch_extract_features(pil_imgs)
+    # Process images in chunks so the GPU never sees the full [N, 3, 384, 384]
+    # tensor at once. Without this, a video with thousands of kept crops sends
+    # gigabytes of preprocessed image data to VRAM in a single ONNX call.
+    chunk_size = cfg.embed_batch_size
+    feature_chunks: list[np.ndarray] = []
+    for chunk_start in range(0, len(pngs), chunk_size):
+        chunk_imgs = [
+            Image.open(p).convert("RGB")
+            for p in pngs[chunk_start:chunk_start + chunk_size]
+        ]
+        feature_chunks.append(ccip_batch_extract_features(chunk_imgs))
+    features = np.concatenate(feature_chunks, axis=0)  # (N, D) on CPU
     progress.stage_advance("dedup", n=len(pngs))
     progress.stage_message("dedup", "computing pairwise distances")
 
-    distances = np.asarray(ccip_batch_differences(features), dtype=np.float64)
+    # Passing numpy arrays skips re-extraction; metric model input is only
+    # (N, D) which is small even at N=10 000.
+    distances = np.asarray(ccip_batch_differences(list(features)), dtype=np.float64)
 
     score_map = _scores_by_filename(project, video_stem)
     scores = [score_map.get(p.stem, 0.0) for p in pngs]
