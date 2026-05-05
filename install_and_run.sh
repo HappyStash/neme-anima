@@ -24,6 +24,7 @@
 #   MODELS_DIR          where to store downloaded weights (default: ~/.cache/neme-anima/models)
 #   SKIP_MODELS=1       skip the ~14 GB weight download (useful for testing)
 #   SKIP_LAUNCH=1       install everything but don't start the UI at the end
+#   DIFFUSION_PIPE_PYTHON  Python for diffusion-pipe's venv (default: 3.12)
 #
 
 set -euo pipefail
@@ -53,6 +54,7 @@ if [[ ! -f pyproject.toml ]] || ! grep -q '^name = "neme-anima"' pyproject.toml;
 fi
 
 DIFFUSION_PIPE_DIR="${DIFFUSION_PIPE_DIR:-$HOME/diffusion-pipe}"
+DIFFUSION_PIPE_PYTHON="${DIFFUSION_PIPE_PYTHON:-3.12}"
 MODELS_DIR="${MODELS_DIR:-$HOME/.cache/neme-anima/models}"
 DEFAULTS_DIR="$HOME/.neme-anima"
 DEFAULTS_FILE="$DEFAULTS_DIR/training-defaults.json"
@@ -64,6 +66,7 @@ LLM_FILE="$MODELS_DIR/qwen_3_06b_base.safetensors"
 printf '%s%sNeme-Anima installer%s\n' "$BOLD" "$CYAN" "$RESET"
 info "repo:           $REPO_ROOT"
 info "diffusion-pipe: $DIFFUSION_PIPE_DIR"
+info "dp python:      $DIFFUSION_PIPE_PYTHON"
 info "models:         $MODELS_DIR"
 
 # ----- 1. uv ----------------------------------------------------------------
@@ -166,13 +169,31 @@ success "diffusion-pipe at $DIFFUSION_PIPE_DIR"
 
 step "6/9  Setting up diffusion-pipe's Python venv"
 pushd "$DIFFUSION_PIPE_DIR" >/dev/null
+needs_dp_venv=true
 if [[ ! -d .venv ]]; then
-    info "creating venv with uv…"
-    uv venv
+    info "creating venv with uv (Python $DIFFUSION_PIPE_PYTHON)…"
+elif [[ ! -x .venv/bin/python ]]; then
+    warn "existing .venv is missing bin/python — recreating it"
+    rm -rf .venv
+else
+    if ! dp_python_version="$(.venv/bin/python -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"; then
+        warn "could not determine existing diffusion-pipe venv Python version — recreating it"
+        rm -rf .venv
+    elif [[ "$dp_python_version" == "3.12" ]]; then
+        needs_dp_venv=false
+        info "existing diffusion-pipe venv uses Python $dp_python_version"
+    else
+        warn "existing diffusion-pipe venv uses Python $dp_python_version; diffusion-pipe needs Python 3.12"
+        warn "recreating .venv with Python $DIFFUSION_PIPE_PYTHON"
+        rm -rf .venv
+    fi
+fi
+if $needs_dp_venv; then
+    uv venv --python "$DIFFUSION_PIPE_PYTHON"
 fi
 info "installing diffusion-pipe requirements (this can take a while)…"
 if [[ -f requirements.txt ]]; then
-    uv pip install -r requirements.txt
+    uv pip install --python .venv/bin/python -r requirements.txt
 else
     warn "no requirements.txt found in $DIFFUSION_PIPE_DIR — skipping (upstream layout may have changed)"
 fi
@@ -181,7 +202,7 @@ fi
 # training time.
 if ! .venv/bin/python -c "import torchvision" 2>/dev/null; then
     info "torchvision missing from diffusion-pipe venv — installing…"
-    uv pip install torchvision
+    uv pip install --python .venv/bin/python torchvision
 fi
 # deepspeed is the default launcher; verify it landed.
 if [[ ! -x .venv/bin/deepspeed ]] && [[ ! -x venv/bin/deepspeed ]]; then

@@ -58,9 +58,12 @@ def test_validate_for_run_passes_when_paths_resolve(
     dp_dir = tmp_path / "diffusion-pipe"
     dp_dir.mkdir()
     (dp_dir / "train.py").write_text("# fake")
-    dit = tmp_path / "dit.safetensors"; dit.write_bytes(b"")
-    vae = tmp_path / "vae.safetensors"; vae.write_bytes(b"")
-    llm = tmp_path / "llm.safetensors"; llm.write_bytes(b"")
+    dit = tmp_path / "dit.safetensors"
+    dit.write_bytes(b"")
+    vae = tmp_path / "vae.safetensors"
+    vae.write_bytes(b"")
+    llm = tmp_path / "llm.safetensors"
+    llm.write_bytes(b"")
 
     cfg = project.training
     cfg.diffusion_pipe_dir = str(dp_dir)
@@ -73,16 +76,51 @@ def test_validate_for_run_passes_when_paths_resolve(
     assert training.validate_for_run(cfg) == []
 
 
+@pytest.mark.parametrize("venv_name", [".venv", "venv"])
+def test_validate_for_run_rejects_diffusion_pipe_python_before_312(
+    project: Project, tmp_path: Path, venv_name: str,
+):
+    dp_dir = tmp_path / "diffusion-pipe"
+    dp_dir.mkdir()
+    (dp_dir / "train.py").write_text("# fake")
+    venv_bin = dp_dir / venv_name / "bin"
+    venv_bin.mkdir(parents=True)
+    fake_python = venv_bin / "python"
+    fake_python.write_text("#!/usr/bin/env sh\nprintf '3.11\\n'\n")
+    fake_python.chmod(0o755)
+    dit = tmp_path / "dit.safetensors"
+    dit.write_bytes(b"")
+    vae = tmp_path / "vae.safetensors"
+    vae.write_bytes(b"")
+    llm = tmp_path / "llm.safetensors"
+    llm.write_bytes(b"")
+
+    cfg = project.training
+    cfg.diffusion_pipe_dir = str(dp_dir)
+    cfg.dit_path = str(dit)
+    cfg.vae_path = str(vae)
+    cfg.llm_path = str(llm)
+    cfg.launcher_override = "/bin/sh -c true {config}"
+
+    problems = training.validate_for_run(cfg)
+    assert any("Python 3.11" in p and "autocommit" in p for p in problems)
+
+
 def test_validate_for_run_requires_train_py(project: Project, tmp_path: Path):
     dp_dir = tmp_path / "diffusion-pipe-no-train"
     dp_dir.mkdir()
     # Note: no train.py
-    dit = tmp_path / "dit.safetensors"; dit.write_bytes(b"")
-    vae = tmp_path / "vae.safetensors"; vae.write_bytes(b"")
-    llm = tmp_path / "llm.safetensors"; llm.write_bytes(b"")
+    dit = tmp_path / "dit.safetensors"
+    dit.write_bytes(b"")
+    vae = tmp_path / "vae.safetensors"
+    vae.write_bytes(b"")
+    llm = tmp_path / "llm.safetensors"
+    llm.write_bytes(b"")
     cfg = project.training
     cfg.diffusion_pipe_dir = str(dp_dir)
-    cfg.dit_path = str(dit); cfg.vae_path = str(vae); cfg.llm_path = str(llm)
+    cfg.dit_path = str(dit)
+    cfg.vae_path = str(vae)
+    cfg.llm_path = str(llm)
     problems = training.validate_for_run(cfg)
     assert any("train.py" in p for p in problems)
 

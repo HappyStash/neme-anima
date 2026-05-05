@@ -18,6 +18,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -101,6 +102,66 @@ def check_path(raw: str, *, expect: str = "any") -> PathCheck:
     )
 
 
+def _diffusion_pipe_python_problem(diffusion_pipe_dir: str) -> str | None:
+    """Return a problem string when diffusion-pipe's local venv is too old."""
+    if not diffusion_pipe_dir:
+        return None
+    dp = Path(diffusion_pipe_dir).expanduser()
+    python = next(
+        (
+            candidate
+            for candidate in (
+                dp / ".venv" / "bin" / "python",
+                dp / "venv" / "bin" / "python",
+            )
+            if candidate.exists()
+        ),
+        None,
+    )
+    if python is None:
+        return None
+    if not python.is_file():
+        return f"diffusion-pipe venv python is not a file: {python}"
+    try:
+        result = subprocess.run(
+            [
+                str(python),
+                "-c",
+                (
+                    "import sys; "
+                    "print(f'{sys.version_info.major}.{sys.version_info.minor}')"
+                ),
+            ],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except OSError as e:
+        return f"could not run diffusion-pipe venv python at {python}: {e}"
+    except subprocess.TimeoutExpired:
+        return f"timed out checking diffusion-pipe venv python at {python}"
+    version = result.stdout.strip()
+    if result.returncode != 0 or not version:
+        details = result.stderr.strip() or f"exit code {result.returncode}"
+        return (
+            f"could not determine diffusion-pipe venv Python version at {python}: "
+            f"{details}"
+        )
+    major_minor = tuple(
+        int(part) for part in version.split(".", 2)[:2] if part.isdigit()
+    )
+    if major_minor < (3, 12):
+        return (
+            f"diffusion-pipe venv uses Python {version}; diffusion-pipe requires "
+            "Python 3.12+ because it calls sqlite3.connect(..., autocommit=...). "
+            f"Recreate it with: cd '{dp}' && "
+            "rm -rf .venv && uv venv --python 3.12 && "
+            "uv pip install --python .venv/bin/python -r requirements.txt"
+        )
+    return None
+
+
 def validate_for_run(config: TrainingConfig) -> list[str]:
     """Return a list of human-readable problems blocking a training run.
 
@@ -128,6 +189,9 @@ def validate_for_run(config: TrainingConfig) -> list[str]:
         problems.append(
             f"diffusion-pipe directory does not contain train.py at {train_py}",
         )
+    python_problem = _diffusion_pipe_python_problem(config.diffusion_pipe_dir)
+    if python_problem:
+        problems.append(python_problem)
 
     # Pre-flight the launcher binary so we surface a clear UI message instead
     # of a generic FileNotFoundError out of subprocess_exec at run time.

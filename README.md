@@ -42,7 +42,7 @@ For the trainer:
 bash install_and_run.sh
 ```
 
-The script installs `uv` and Node.js if they aren't already on the system, syncs the Python deps, builds the frontend, clones `tdrussell/diffusion-pipe` into `~/diffusion-pipe` and sets up its venv, downloads the three Anima training weights (~14 GB) from HuggingFace, prefills the four trainer paths in the UI's Settings tab, and starts the server.
+The script installs `uv` and Node.js if they aren't already on the system, syncs the Python deps, builds the frontend, clones `tdrussell/diffusion-pipe` into `~/diffusion-pipe` and sets up its Python 3.12 venv, downloads the three Anima training weights (~14 GB) from HuggingFace, prefills the four trainer paths in the UI's Settings tab, and starts the server.
 
 Re-running it is safe (will skip anything already in place).
 
@@ -51,6 +51,7 @@ Useful environment overrides:
 | Variable | Default | What it does |
 |---|---|---|
 | `DIFFUSION_PIPE_DIR` | `~/diffusion-pipe` | Where to clone diffusion-pipe |
+| `DIFFUSION_PIPE_PYTHON` | `3.12` | Python interpreter/version for diffusion-pipe's venv |
 | `MODELS_DIR` | `~/.cache/neme-anima/models` | Where to put the downloaded weights |
 | `SKIP_MODELS=1` | off | Skip the 14 GB weight download |
 | `SKIP_LAUNCH=1` | off | Install everything, but don't start the UI at the end |
@@ -144,7 +145,9 @@ Training is run through [tdrussell/diffusion-pipe](https://github.com/tdrussell/
 
 ```sh
 git clone https://github.com/tdrussell/diffusion-pipe ~/diffusion-pipe
-cd ~/diffusion-pipe && uv venv && uv pip install -r requirements.txt
+cd ~/diffusion-pipe
+uv venv --python 3.12
+uv pip install --python .venv/bin/python -r requirements.txt
 ```
 
 Then in the Settings tab, point `diffusion_pipe_dir` at that clone and set the Anima DiT, Qwen VAE, and Qwen 3 0.6B text encoder paths (separate download on Huggingface).
